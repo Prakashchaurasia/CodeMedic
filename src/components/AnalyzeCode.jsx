@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { supabase } from "../lib/supabase";
+import { analyzeSubmittedCode } from "../services/codeAnalysis";
 
 function AnalyzeCode({ problem }) {
     const [code, setCode] = useState("");
@@ -25,6 +27,12 @@ function AnalyzeCode({ problem }) {
 
     const [thinkingSubmitted, setThinkingSubmitted] =
         useState(false);
+
+    const [problemAttemptId, setProblemAttemptId] = useState(null);
+
+    const [thinkingError, setThinkingError] = useState("");
+
+    const [thinkingSaving, setThinkingSaving] = useState(false);
 
 
     const dataStructures = [
@@ -99,70 +107,7 @@ function AnalyzeCode({ problem }) {
     }
     
     function getThinkingResult() {
-        if (!problem) {
-            return {
-                title: "No Problem Selected",
-                message: "Select a problem before analyzing your thinking."
-            };
-        }
 
-        const dataStructureMatch =
-            selectedDataStructures.some((structure) =>
-                problem.dataStructures?.includes(structure)
-            );
-
-        const patternMatch =
-            selectedPatterns.some((pattern) =>
-                problem.patterns?.includes(pattern)
-            );
-
-        const complexityMatch =
-            selectedComplexity === problem.expectedTime;
-
-        if (
-            dataStructureMatch &&
-            patternMatch &&
-            complexityMatch
-        ) {
-            return {
-                title: "Strong Match ✓",
-                message:
-                    "Your initial problem-solving direction matches the expected approach."
-            };
-        }
-
-        if (!patternMatch) {
-            return {
-                title: "Pattern Recognition Needs Practice",
-                message:
-                    "Your selected pattern does not match the pattern CodeMedic expected for this problem."
-            };
-        }
-
-        if (!dataStructureMatch) {
-            return {
-                title: "Data Structure Selection Needs Practice",
-                message:
-                    "Your selected data structure does not match the expected data structure for this problem."
-            };
-        }
-
-        if (!complexityMatch) {
-            return {
-                title: "Complexity Estimation Needs Practice",
-                message:
-                    "Your expected time complexity differs from the expected complexity for this problem."
-            };
-        }
-
-        return {
-            title: "Mixed Result",
-            message:
-                "Some parts of your initial thinking match, while others need more practice."
-        };
-    }
-    
-    function getThinkingResult() {
         if (!problem) {
             return {
                 title: "No Problem Selected",
@@ -173,7 +118,7 @@ function AnalyzeCode({ problem }) {
 
         const dataStructureMatch =
             selectedDataStructures.some((structure) =>
-                problem.dataStructures?.includes(structure)
+                problem.data_structures?.includes(structure)
             );
 
         const patternMatch =
@@ -182,7 +127,8 @@ function AnalyzeCode({ problem }) {
             );
 
         const complexityMatch =
-            selectedComplexity === problem.expectedTime;
+            selectedComplexity === problem.expected_time;
+
 
         if (
             dataStructureMatch &&
@@ -196,6 +142,7 @@ function AnalyzeCode({ problem }) {
             };
         }
 
+
         if (!patternMatch) {
             return {
                 title: "Pattern Recognition Needs Practice",
@@ -203,6 +150,7 @@ function AnalyzeCode({ problem }) {
                     "Your selected pattern does not match the expected pattern for this problem."
             };
         }
+
 
         if (!dataStructureMatch) {
             return {
@@ -212,6 +160,7 @@ function AnalyzeCode({ problem }) {
             };
         }
 
+
         if (!complexityMatch) {
             return {
                 title: "Complexity Estimation Needs Practice",
@@ -220,6 +169,7 @@ function AnalyzeCode({ problem }) {
             };
         }
 
+
         return {
             title: "Mixed Result",
             message:
@@ -227,75 +177,192 @@ function AnalyzeCode({ problem }) {
         };
     }
 
-    function analyzeCode() {
 
-        if (code.trim() === "") {
-            alert("Please write your code first.");
+    async function submitThinking() {
+         
+        setThinkingError("");
+
+        if (!problem) {
+            setThinkingError("No problem selected.");
             return;
         }
 
-        setIsAnalyzing(true);
+        if (selectedDataStructures.length === 0) {
+            setThinkingError(
+                "Please select at least one data structure."
+            );
+            return;
+        }
 
-        setTimeout(() => {
+        if (selectedPatterns.length === 0) {
+            setThinkingError(
+                "Please select at least one pattern."
+            );
+            return;
+        }
 
-            const result = {
+        if (!selectedComplexity) {
+            setThinkingError(
+                "Please select an expected time complexity."
+            );
+            return;
+        }
 
-                correctness: "Likely Correct",
+        setThinkingSaving(true);
 
-                approach: "Brute Force",
-
-                bruteForce: "Yes",
-
-                timeComplexity: "O(n²)",
-
-                spaceComplexity: "O(1)",
-
-
-                actualDataStructures: [
-                    "Array"
-                ],
-
-                actualPattern: "Brute Force",
-
-
-                thinkingObservation:
-                    "You identified the possibility of using a Hash Map, but your implementation uses a brute-force approach.",
-
-
-                explanation:
-                    "Your solution checks every possible pair of elements. The logic can find the answer, but the number of comparisons grows quickly as the input becomes larger.",
+        const {
+            data: { user },
+            error: userError
+        } = await supabase.auth.getUser();
 
 
-                optimization:
-                    "Think about whether you can remember values you have already seen while traversing the array.",
+        if (userError || !user) {
+
+            setThinkingError(
+                "Unable to identify the logged-in user."
+            );
+
+            setThinkingSaving(false);
+
+            return;
+        }
 
 
-                hints: [
-
-                    "Think about what information you need to remember while traversing the array.",
-
-                    "Can you store previously seen values somewhere?",
-
-                    "Can you use that stored information to avoid checking every possible pair?"
-
-                ]
-
-            };
+        const { error } = await supabase
+            .from("thinking_attempts")
+            .insert({
+                user_id: user.id,
+                problem_id: problem.id,
+                data_structures_selected: selectedDataStructures,
+                patterns_selected: selectedPatterns,
+                expected_time: selectedComplexity
+            });
 
 
-            setAnalysis(result);
+        setThinkingSaving(false);
 
-            setHintIndex(-1);
 
-            setShowExplanation(false);
+        if (error) {
 
-            setShowOptimization(false);
+            console.error(
+                "Thinking attempt save error:",
+                error
+            );
 
-            setIsAnalyzing(false);
+            setThinkingError(
+                "Unable to save your thinking. Please try again."
+            );
 
-        }, 1000);
+            return;
+        }
+
+
+        setThinkingSubmitted(true);
     }
 
+
+    async function analyzeCode() {
+            if (code.trim() === "") {
+                alert("Please write your code first.");
+                return;
+            }
+
+            setIsAnalyzing(true);
+
+            const {
+                data: { user },
+                error: userError
+            } = await supabase.auth.getUser();
+
+            if (userError || !user) {
+                console.error("User fetch error:", userError);
+                alert("Unable to identify the logged-in user.");
+                setIsAnalyzing(false);
+                return;
+            }
+
+            const { data: attempt, error: attemptError } =
+                await supabase
+                    .from("problem_attempts")
+                    .insert({
+                        user_id: user.id,
+                        problem_id: problem.id,
+                        language: language,
+                        submitted_code: code,
+                        status: "submitted"
+                    })
+                    .select()
+                    .single();
+
+            if (attemptError) {
+                console.error(
+                    "Problem attempt save error:",
+                    attemptError
+                );
+
+                alert("Unable to save your code submission.");
+                setIsAnalyzing(false);
+                return;
+            }
+
+            setProblemAttemptId(attempt.id);
+
+            console.log(
+                "Problem attempt saved:",
+                attempt
+            );
+
+            setTimeout(async () => {
+
+                const result = analyzeSubmittedCode({
+                    code,
+                    language,
+                    problem,
+                    thinking: {
+                        dataStructures: selectedDataStructures,
+                        patterns: selectedPatterns,
+                        complexity: selectedComplexity
+                    }
+                });
+
+                setAnalysis(result);
+
+                setHintIndex(-1);
+                setShowExplanation(false);
+                setShowOptimization(false);
+
+                const { error: analysisError } = await supabase
+                    .from("code_analyses")
+                    .insert({
+                        attempt_id: attempt.id,
+                        correctness: result.correctness,
+                        approach: result.approach,
+                        brute_force: result.bruteForce,
+                        time_complexity: result.timeComplexity,
+                        space_complexity: result.spaceComplexity,
+                        actual_data_structures:
+                            result.actualDataStructures,
+                        actual_patterns:
+                            result.actualPatterns,
+                        weakness:
+                            result.weakness,
+                        explanation:
+                            result.explanation,
+                        optimization:
+                            result.optimization
+                    });
+
+                if (analysisError) {
+                    console.error(
+                        "Code analysis save error:",
+                        analysisError
+                    );
+                }
+
+                setIsAnalyzing(false);
+
+            }, 1000);
+    }
 
     function showNextHint() {
 
@@ -528,26 +595,52 @@ function AnalyzeCode({ problem }) {
                     </div>
 
 
+                    {thinkingError && (
+                        <p className="auth-error">
+                            {thinkingError}
+                        </p>
+                    )}
+
+
                     <button
                         className="thinking-submit-button"
-                        onClick={() =>
-                            setThinkingSubmitted(true)
-                        }
+                        onClick={submitThinking}
                         disabled={
                             selectedDataStructures.length === 0 ||
                             selectedPatterns.length === 0 ||
-                            selectedComplexity === ""
+                            selectedComplexity === "" ||
+                            thinkingSaving ||
+                            thinkingSubmitted
                         }
                     >
-                        {thinkingSubmitted
-                            ? "Thinking Submitted ✓"
-                            : "Lock My Thinking"
+                        {thinkingSaving
+                            ? "Saving..."
+                            : thinkingSubmitted
+                                ? "Thinking Submitted ✓"
+                                : "Lock My Thinking"
                         }
                     </button>
 
                 </div>
 
             </section>
+
+            {thinkingResult && (
+                <div className="thinking-result">
+                    <p className="comparison-label">
+                        THINKING DIAGNOSIS
+                    </p>
+
+                    <h3>
+                        {thinkingResult.title}
+                    </h3>
+
+                    <p>
+                        {thinkingResult.message}
+                    </p>
+                </div>
+            )}
+
 
 
             {/* =========================
@@ -759,7 +852,7 @@ function AnalyzeCode({ problem }) {
                             </span>
 
                             <h3>
-                                {analysis.bruteForce}
+                                {analysis.bruteForce ? "Yes" : "No"}
                             </h3>
 
                         </div>
@@ -929,22 +1022,6 @@ function AnalyzeCode({ problem }) {
                         </p>
 
                     </div>
-
-                    {thinkingResult && (
-                        <div className="thinking-result">
-                            <p className="comparison-label">
-                                THINKING DIAGNOSIS
-                            </p>
-
-                            <h3>
-                                {thinkingResult.title}
-                            </h3>
-
-                            <p>
-                                {thinkingResult.message}
-                            </p>
-                        </div>
-                    )}
 
 
                     {/* =========================
