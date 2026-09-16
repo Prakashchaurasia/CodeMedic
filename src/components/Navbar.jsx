@@ -1,49 +1,171 @@
+import { useState } from "react";
 import { supabase } from "../lib/supabase";
 
-function Navbar() {
+function Navbar({ onMenuClick }) {
+
+    const [showProfile, setShowProfile] = useState(false);
 
     async function handleLogout() {
 
-        const { error } = await supabase.auth.signOut();
+        const { error } =
+            await supabase.auth.signOut();
 
         if (error) {
-            console.error("Logout error:", error);
+            console.error(
+                "Logout error:",
+                error
+            );
         }
     }
 
     return (
-        <nav className="navbar">
+        <header className="top-navbar">
 
-            <div className="logo">
+            {/* MOBILE MENU */}
 
-                <div className="logo-icon">
-                    <span>&lt;/&gt;</span>
+            <button
+                className="mobile-menu-button"
+                onClick={onMenuClick}
+                aria-label="Open navigation"
+            >
+                ☰
+            </button>
+
+
+            {/* BRAND */}
+
+            <div className="brand">
+
+                <div className="brand-icon">
+                    &lt;/&gt;
                 </div>
 
-                <div className="logo-text">
-                    <span className="code-text">Code</span>
-                    <span className="medic-text">Medic</span>
+                <div className="brand-text">
+
+                    <span className="brand-name">
+                        Code<span>Medic</span>
+                    </span>
+
+                    <span className="brand-tagline">
+                        Heal Your DSA Skills
+                    </span>
+
                 </div>
 
             </div>
 
 
-            <div className="nav-links">
+            {/* SEARCH */}
 
-                <span>Dashboard</span>
+            <div className="global-search">
 
-                <span>Profile</span>
+                <span className="search-icon">
+                    ⌕
+                </span>
+
+                <input
+                    type="text"
+                    placeholder="Search problems, topics, or anything..."
+                />
+
+                <span className="search-shortcut">
+                    Ctrl K
+                </span>
+
+            </div>
+
+
+            {/* RIGHT SIDE */}
+
+            <div className="navbar-actions">
+
+                {/* NOTIFICATION */}
 
                 <button
-                    className="logout-button"
-                    onClick={handleLogout}
+                    className="notification-button"
+                    aria-label="Notifications"
                 >
-                    Logout
+                    ♧
+                    <span className="notification-dot"></span>
                 </button>
+
+
+                {/* PROFILE */}
+
+                <div className="profile-wrapper">
+
+                    <button
+                        className="profile-button"
+                        onClick={() =>
+                            setShowProfile(
+                                !showProfile
+                            )
+                        }
+                    >
+
+                        <div className="profile-avatar">
+                            P
+                        </div>
+
+                        <div className="profile-info">
+
+                            <strong>
+                                Prakash Kumar
+                            </strong>
+
+                            <span>
+                                Keep Learning •
+                            </span>
+
+                        </div>
+
+                        <span className="profile-arrow">
+                            ˅
+                        </span>
+
+                    </button>
+
+
+                    {showProfile && (
+
+                        <div className="profile-menu">
+
+                            <div className="profile-menu-header">
+
+                                <strong>
+                                    Prakash Kumar
+                                </strong>
+
+                                <span>
+                                    Student
+                                </span>
+
+                            </div>
+
+                            <button>
+                                Profile
+                            </button>
+
+                            <button>
+                                Settings
+                            </button>
+
+                            <button
+                                className="logout-button"
+                                onClick={handleLogout}
+                            >
+                                Logout
+                            </button>
+
+                        </div>
+
+                    )}
+
+                </div>
 
             </div>
 
-        </nav>
+        </header>
     );
 }
 

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { supabase } from "../lib/supabase";
 import { analyzeSubmittedCode } from "../services/codeAnalysis";
+import { analyzeWithAI } from "../services/aiAnalysis";
 
 function AnalyzeCode({ problem }) {
     const [code, setCode] = useState("");
@@ -106,78 +107,6 @@ function AnalyzeCode({ problem }) {
         }
     }
     
-    function getThinkingResult() {
-
-        if (!problem) {
-            return {
-                title: "No Problem Selected",
-                message:
-                    "Select a problem before analyzing your thinking."
-            };
-        }
-
-        const dataStructureMatch =
-            selectedDataStructures.some((structure) =>
-                problem.data_structures?.includes(structure)
-            );
-
-        const patternMatch =
-            selectedPatterns.some((pattern) =>
-                problem.patterns?.includes(pattern)
-            );
-
-        const complexityMatch =
-            selectedComplexity === problem.expected_time;
-
-
-        if (
-            dataStructureMatch &&
-            patternMatch &&
-            complexityMatch
-        ) {
-            return {
-                title: "Strong Match ✓",
-                message:
-                    "Your initial problem-solving direction matches the expected approach."
-            };
-        }
-
-
-        if (!patternMatch) {
-            return {
-                title: "Pattern Recognition Needs Practice",
-                message:
-                    "Your selected pattern does not match the expected pattern for this problem."
-            };
-        }
-
-
-        if (!dataStructureMatch) {
-            return {
-                title: "Data Structure Selection Needs Practice",
-                message:
-                    "Your selected data structure does not match the expected data structure for this problem."
-            };
-        }
-
-
-        if (!complexityMatch) {
-            return {
-                title: "Complexity Estimation Needs Practice",
-                message:
-                    "Your expected time complexity differs from the expected complexity for this problem."
-            };
-        }
-
-
-        return {
-            title: "Mixed Result",
-            message:
-                "Some parts of your initial thinking match, while others need more practice."
-        };
-    }
-
-
     async function submitThinking() {
          
         setThinkingError("");
@@ -312,56 +241,72 @@ function AnalyzeCode({ problem }) {
                 attempt
             );
 
-            setTimeout(async () => {
+            // Student's thinking before coding
+            const thinking = {
+                dataStructures: selectedDataStructures,
+                patterns: selectedPatterns,
+                complexity: selectedComplexity
+            };
 
-                const result = analyzeSubmittedCode({
-                    code,
-                    language,
-                    problem,
-                    thinking: {
-                        dataStructures: selectedDataStructures,
-                        patterns: selectedPatterns,
-                        complexity: selectedComplexity
-                    }
+            // First run our basic analyzer
+            const basicResult = analyzeSubmittedCode({
+                code,
+                language,
+                problem,
+                thinking
+            });
+
+            // Then send everything to Gemini
+            const result = await analyzeWithAI({
+                problem,
+                thinking,
+                code,
+                language,
+                basicAnalysis: basicResult
+            });
+
+            console.log(
+                "AI diagnosis received:",
+                result
+            );
+
+
+            setAnalysis(result);
+
+            setHintIndex(-1);
+            setShowExplanation(false);
+            setShowOptimization(false);
+
+            const { error: analysisError } = await supabase
+                .from("code_analyses")
+                .insert({
+                    attempt_id: attempt.id,
+                    correctness: result.correctness,
+                    approach: result.approach,
+                    brute_force: result.brute_force,
+                    time_complexity: result.time_complexity,
+                    space_complexity: result.space_complexity,
+                    actual_data_structures:
+                        result.actual_data_structures,
+                    actual_patterns:
+                        result.actual_patterns,
+                    weakness:
+                        result.weakness,
+                    explanation:
+                        result.explanation,
+                    optimization:
+                        result.optimization
                 });
 
-                setAnalysis(result);
+            if (analysisError) {
+                console.error(
+                    "Code analysis save error:",
+                    analysisError
+                );
+            }
 
-                setHintIndex(-1);
-                setShowExplanation(false);
-                setShowOptimization(false);
+            setIsAnalyzing(false);
 
-                const { error: analysisError } = await supabase
-                    .from("code_analyses")
-                    .insert({
-                        attempt_id: attempt.id,
-                        correctness: result.correctness,
-                        approach: result.approach,
-                        brute_force: result.bruteForce,
-                        time_complexity: result.timeComplexity,
-                        space_complexity: result.spaceComplexity,
-                        actual_data_structures:
-                            result.actualDataStructures,
-                        actual_patterns:
-                            result.actualPatterns,
-                        weakness:
-                            result.weakness,
-                        explanation:
-                            result.explanation,
-                        optimization:
-                            result.optimization
-                    });
-
-                if (analysisError) {
-                    console.error(
-                        "Code analysis save error:",
-                        analysisError
-                    );
-                }
-
-                setIsAnalyzing(false);
-
-            }, 1000);
     }
 
     function showNextHint() {
@@ -396,11 +341,6 @@ function AnalyzeCode({ problem }) {
         code === ""
             ? 0
             : code.split("\n").length;
-
-    const thinkingResult =
-    thinkingSubmitted
-        ? getThinkingResult()
-        : null;
 
     return (
 
@@ -625,24 +565,6 @@ function AnalyzeCode({ problem }) {
 
             </section>
 
-            {thinkingResult && (
-                <div className="thinking-result">
-                    <p className="comparison-label">
-                        THINKING DIAGNOSIS
-                    </p>
-
-                    <h3>
-                        {thinkingResult.title}
-                    </h3>
-
-                    <p>
-                        {thinkingResult.message}
-                    </p>
-                </div>
-            )}
-
-
-
             {/* =========================
                 CODE EDITOR
             ========================= */}
@@ -852,7 +774,7 @@ function AnalyzeCode({ problem }) {
                             </span>
 
                             <h3>
-                                {analysis.bruteForce ? "Yes" : "No"}
+                                {analysis.brute_force ? "Yes" : "No"}
                             </h3>
 
                         </div>
@@ -865,7 +787,7 @@ function AnalyzeCode({ problem }) {
                             </span>
 
                             <h3>
-                                {analysis.timeComplexity}
+                                {analysis.time_complexity}
                             </h3>
 
                         </div>
@@ -878,7 +800,7 @@ function AnalyzeCode({ problem }) {
                             </span>
 
                             <h3>
-                                {analysis.spaceComplexity}
+                                {analysis.space_complexity}
                             </h3>
 
                         </div>
@@ -892,188 +814,190 @@ function AnalyzeCode({ problem }) {
 
                     <div className="thinking-comparison">
 
-                        {/* STUDENT THINKING */}
+                            {/* STUDENT THINKING */}
 
-                        <div className="comparison-column">
+                            <div className="comparison-column">
 
-                            <p className="comparison-label">
-                                YOUR THINKING
-                            </p>
-
-                            <h3>
-                                Before Coding
-                            </h3>
-
-
-                            <div className="comparison-item">
-
-                                <span>
-                                    Data Structures
-                                </span>
-
-                                <strong>
-                                    {selectedDataStructures.join(" + ")}
-                                </strong>
-
-                            </div>
-
-
-                            <div className="comparison-item">
-
-                                <span>
-                                    Patterns
-                                </span>
-
-                                <strong>
-                                    {selectedPatterns.join(" + ")}
-                                </strong>
-
-                            </div>
-
-
-                            <div className="comparison-item">
-
-                                <span>
-                                    Expected Time
-                                </span>
-
-                                <strong>
-                                    {selectedComplexity}
-                                </strong>
-
-                            </div>
-
-                        </div>
-
-
-                        {/* VS */}
-
-                        <div className="comparison-divider">
-                            VS
-                        </div>
-
-
-                        {/* ACTUAL IMPLEMENTATION */}
-
-                        <div className="comparison-column">
-
-                            <p className="comparison-label">
-                                YOUR IMPLEMENTATION
-                            </p>
-
-                            <h3>
-                                What CodeMedic Found
-                            </h3>
-
-
-                            <div className="comparison-item">
-
-                                <span>
-                                    Data Structure
-                                </span>
-
-                                <strong>
-                                    {analysis.actualDataStructures.join(" + ")}
-                                </strong>
-
-                            </div>
-
-
-                            <div className="comparison-item">
-
-                                <span>
-                                    Pattern
-                                </span>
-
-                                <strong>
-                                    {analysis.actualPattern}
-                                </strong>
-
-                            </div>
-
-
-                            <div className="comparison-item">
-
-                                <span>
-                                    Time Complexity
-                                </span>
-
-                                <strong>
-                                    {analysis.timeComplexity}
-                                </strong>
-
-                            </div>
-
-                        </div>
-
-                    </div>
-
-
-                    {/* CODEMEDIC OBSERVATION */}
-
-                    <div className="thinking-observation">
-
-                        <p className="comparison-label">
-                            CODEMEDIC OBSERVATION
-                        </p>
-
-                        <p>
-                            {analysis.thinkingObservation}
-                        </p>
-
-                    </div>
-
-
-                    {/* =========================
-                        UNDERSTAND MISTAKE
-                    ========================= */}
-
-                    <div className="help-section">
-
-                        <h3>
-                            Want to understand your approach?
-                        </h3>
-
-                        <p>
-                            CodeMedic won't reveal the solution.
-                            It will help you understand the issue
-                            step by step.
-                        </p>
-
-
-                        {!showExplanation && (
-
-                            <button
-                                className="help-button"
-                                onClick={() =>
-                                    setShowExplanation(true)
-                                }
-                            >
-                                Understand My Mistake
-                            </button>
-
-                        )}
-
-
-                        {showExplanation && (
-
-                            <div className="revealed-help">
-
-                                <h4>
-                                    What CodeMedic noticed
-                                </h4>
-
-                                <p>
-                                    {analysis.explanation}
+                                <p className="comparison-label">
+                                    YOUR THINKING
                                 </p>
 
+                                <h3>
+                                    Before Coding
+                                </h3>
+
+
+                                <div className="comparison-item">
+
+                                    <span>
+                                        Data Structures
+                                    </span>
+
+                                    <strong>
+                                        {selectedDataStructures.join(" + ")}
+                                    </strong>
+
+                                </div>
+
+
+                                <div className="comparison-item">
+
+                                    <span>
+                                        Patterns
+                                    </span>
+
+                                    <strong>
+                                        {selectedPatterns.join(" + ")}
+                                    </strong>
+
+                                </div>
+
+
+                                <div className="comparison-item">
+
+                                    <span>
+                                        Expected Time
+                                    </span>
+
+                                    <strong>
+                                        {selectedComplexity}
+                                    </strong>
+
+                                </div>
+
                             </div>
 
-                        )}
 
-                    </div>
+                            {/* VS */}
+
+                            <div className="comparison-divider">
+                                VS
+                            </div>
 
 
+                            {/* ACTUAL IMPLEMENTATION */}
+
+                            <div className="comparison-column">
+
+                                <p className="comparison-label">
+                                    YOUR IMPLEMENTATION
+                                </p>
+
+                                <h3>
+                                    What CodeMedic Found
+                                </h3>
+
+
+                                <div className="comparison-item">
+
+                                    <span>
+                                        Data Structure
+                                    </span>
+
+                                    <strong>
+                                        {analysis.actual_data_structures?.join(" + ") ||
+                                            "Not detected"}
+                                    </strong>
+
+                                </div>
+
+
+                                <div className="comparison-item">
+
+                                    <span>
+                                        Pattern
+                                    </span>
+
+                                    <strong>
+                                        {analysis.actual_patterns?.join(" + ") ||
+                                            "Not detected"}
+                                    </strong>
+
+                                </div>
+
+
+                                <div className="comparison-item">
+
+                                    <span>
+                                        Time Complexity
+                                    </span>
+
+                                    <strong>
+                                        {analysis.time_complexity || "Unknown"}
+                                    </strong>
+
+                                </div>
+
+                            </div>
+
+                        </div>
+
+
+                        {/* CODEMEDIC OBSERVATION */}
+
+                        <div className="thinking-observation">
+
+                            <p className="comparison-label">
+                                CODEMEDIC OBSERVATION
+                            </p>
+
+                            <p>
+                                {analysis.thinking_observation ||
+                                    "No observation available."}
+                            </p>
+
+                        </div>
+
+
+                        {/* =========================
+                            UNDERSTAND MISTAKE
+                        ========================= */}
+
+                        <div className="help-section">
+
+                            <h3>
+                                Want to understand your approach?
+                            </h3>
+
+                            <p>
+                                CodeMedic won't reveal the solution.
+                                It will help you understand the issue
+                                step by step.
+                            </p>
+
+
+                            {!showExplanation && (
+
+                                <button
+                                    className="help-button"
+                                    onClick={() =>
+                                        setShowExplanation(true)
+                                    }
+                                >
+                                    Understand My Mistake
+                                </button>
+
+                            )}
+
+
+                            {showExplanation && (
+
+                                <div className="revealed-help">
+
+                                    <h4>
+                                        What CodeMedic noticed
+                                    </h4>
+
+                                    <p>
+                                        {analysis.explanation ||
+                                            "No explanation available."}
+                                    </p>
+
+                                </div>
+
+                            )}
+
+                        </div>
                     {/* =========================
                         PROGRESSIVE HINTS
                     ========================= */}

@@ -8,30 +8,55 @@ html {
 
 body {
     margin: 0;
-    font-family: Arial, sans-serif;
-    background: #0b1120;
-    color: #f8fafc;
+
+    font-family:
+        Inter,
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
+
+    background: #070d18;
+
+    color: #e8eef8;
+
+    -webkit-font-smoothing: antialiased;
 }
 
 button,
 input,
-select {
+select,
+textarea {
     font: inherit;
 }
 
-button,
-select {
-    cursor: pointer;
+button {
+    -webkit-tap-highlight-color: transparent;
 }
 
-span,
-li {
-    color: #94a3b8;
+a {
+    color: inherit;
+    text-decoration: none;
 }
 
-h1,
-h2,
-h3,
-p {
-    margin-top: 0;
+::selection {
+    background: rgba(37, 165, 255, 0.3);
+}
+
+::-webkit-scrollbar {
+    width: 7px;
+}
+
+::-webkit-scrollbar-track {
+    background: #080f1c;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #263752;
+    border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #385274;
 }

@@ -6,90 +6,127 @@ import { supabase } from "./lib/supabase";
 
 import Navbar from "./components/Navbar";
 import Sidebar from "./components/Sidebar";
-import Welcome from "./components/Welcome";
-import StatCard from "./components/StatCard";
-import TopicCard from "./components/TopicCard";
-import ProblemCard from "./components/ProblemCard";
 import Problems from "./components/Problems";
 import AnalyzeCode from "./components/AnalyzeCode";
 import Signup from "./components/Signup";
 import Login from "./components/Login";
+import GeneratePractice from "./components/GeneratePractice";
+import Dashboard from "./components/Dashboard";
+
 
 function App() {
 
-    const [session, setSession] = useState(null);
+    const [session, setSession] =
+        useState(null);
 
-    const [profile, setProfile] = useState(null);
+    const [profile, setProfile] =
+        useState(null);
 
-    const [loading, setLoading] = useState(true);
+    const [loading, setLoading] =
+        useState(true);
 
-    const [showSignup, setShowSignup] = useState(false);
+    const [showSignup, setShowSignup] =
+        useState(false);
 
-    const [page, setPage] = useState("Dashboard");
+    const [page, setPage] =
+        useState("Dashboard");
 
-    const [selectedProblem, setSelectedProblem] = useState(null);
+    const [selectedProblem, setSelectedProblem] =
+        useState(null);
+
+    const [mobileSidebarOpen, setMobileSidebarOpen] =
+        useState(false);
 
 
-    // Get the user's profile from public.users
+    /*
+        Get the user's profile
+        from public.users
+    */
     async function fetchProfile(userId) {
 
-        const { data, error } = await supabase
-            .from("users")
-            .select("*")
-            .eq("id", userId)
-            .single();
+        const { data, error } =
+            await supabase
+                .from("users")
+                .select("*")
+                .eq("id", userId)
+                .single();
+
 
         if (error) {
 
-            console.error("Profile fetch error:", error);
+            console.error(
+                "Profile fetch error:",
+                error
+            );
 
             return;
         }
+
 
         setProfile(data);
     }
 
 
-    // Check the current session
+    /*
+        Check the current
+        Supabase authentication session
+    */
     useEffect(() => {
 
         async function getSession() {
 
-            const { data } = await supabase.auth.getSession();
+            const { data } =
+                await supabase.auth.getSession();
+
 
             setSession(data.session);
 
+
             if (data.session) {
 
-                await fetchProfile(data.session.user.id);
+                await fetchProfile(
+                    data.session.user.id
+                );
 
             }
+
 
             setLoading(false);
         }
 
+
         getSession();
 
 
-        // Listen for login/logout changes
+        /*
+            Listen for login/logout
+            and authentication changes
+        */
         const {
-            data: { subscription },
-        } = supabase.auth.onAuthStateChange(
-            (_event, newSession) => {
+            data: {
+                subscription
+            },
+        } =
+            supabase.auth.onAuthStateChange(
+                (_event, newSession) => {
 
-                setSession(newSession);
+                    setSession(newSession);
 
-                if (newSession) {
 
-                    fetchProfile(newSession.user.id);
+                    if (newSession) {
 
-                } else {
+                        fetchProfile(
+                            newSession.user.id
+                        );
 
-                    setProfile(null);
+                    } else {
+
+                        setProfile(null);
+
+                    }
 
                 }
-            }
-        );
+            );
 
 
         return () => {
@@ -101,7 +138,10 @@ function App() {
     }, []);
 
 
-    // Open Analyze Code page
+    /*
+        Open Analyze Code page
+        with the selected problem
+    */
     function openAnalyzeCode(problem) {
 
         setSelectedProblem(problem);
@@ -110,15 +150,20 @@ function App() {
     }
 
 
-    // Loading screen
+    /*
+        Loading screen
+    */
     if (loading) {
 
         return (
+
             <div className="auth-page">
 
                 <div className="auth-card">
 
-                    <h1>CodeMedic</h1>
+                    <h1>
+                        CodeMedic
+                    </h1>
 
                     <p className="auth-subtitle">
                         Loading...
@@ -127,167 +172,212 @@ function App() {
                 </div>
 
             </div>
+
         );
+
     }
 
 
-    // User is not logged in
+    /*
+        User is not logged in
+    */
     if (!session) {
 
+        /*
+            Show Signup page
+        */
         if (showSignup) {
 
             return (
+
                 <Signup
-                    onSwitchToLogin={() => setShowSignup(false)}
+                    onSwitchToLogin={() =>
+                        setShowSignup(false)
+                    }
                 />
+
             );
+
         }
 
 
+        /*
+            Show Login page
+        */
         return (
+
             <Login
-                onSwitchToSignup={() => setShowSignup(true)}
+
+                onSwitchToSignup={() =>
+                    setShowSignup(true)
+                }
 
                 onLoginSuccess={(user) => {
 
-                    console.log("Logged in user:", user);
+                    console.log(
+                        "Logged in user:",
+                        user
+                    );
 
                 }}
+
             />
+
         );
+
     }
 
 
-    // User is logged in
+    /*
+        User is logged in
+    */
     return (
+
         <div className="app">
 
-            <Navbar />
+            {/* =========================
+                TOP NAVBAR
+            ========================== */}
+
+            <Navbar
+
+                onMenuClick={() =>
+                    setMobileSidebarOpen(true)
+                }
+
+            />
+
 
             <div className="layout">
 
+
+                {/* =========================
+                    SIDEBAR
+                ========================== */}
+
                 <Sidebar
+
                     page={page}
+
                     setPage={setPage}
+
+                    isMobileOpen={
+                        mobileSidebarOpen
+                    }
+
+                    onClose={() =>
+                        setMobileSidebarOpen(false)
+                    }
+
                 />
+
+
+                {/* =========================
+                    MAIN CONTENT
+                ========================== */}
 
                 <main className="main-content">
 
-                    <h1 className="page-title">
-                        {page}
-                    </h1>
 
+                    {/* Page title */}
 
-                    {page === "Dashboard" && (
-                        <>
+                    {page !== "Generate & Practice" && (
 
-                            <Welcome
-                                userName={profile?.name}
-                            />
+                        <h1 className="page-title">
 
+                            {page}
 
-                            <section className="statistics">
+                        </h1>
 
-                                <StatCard
-                                    title="Problems Solved"
-                                    value="24"
-                                />
-
-                                <StatCard
-                                    title="Weak Topics"
-                                    value="3"
-                                />
-
-                                <StatCard
-                                    title="Current Streak"
-                                    value="7 days"
-                                />
-
-                            </section>
-
-
-                            <section className="dsa-health">
-
-                                <h2>DSA Health</h2>
-
-                                <div className="topic-list">
-
-                                    <TopicCard
-                                        topic="Arrays"
-                                        status="Good"
-                                    />
-
-                                    <TopicCard
-                                        topic="Linked List"
-                                        status="Good"
-                                    />
-
-                                    <TopicCard
-                                        topic="Recursion"
-                                        status="Weak"
-                                    />
-
-                                </div>
-
-                            </section>
-
-
-                            <section className="recent-problems">
-
-                                <h2>Recent Problems</h2>
-
-                                <div className="problem-list">
-
-                                    <ProblemCard
-                                        title="Two Sum"
-                                        topic="Arrays"
-                                        difficulty="Easy"
-                                        status="Solved"
-                                    />
-
-                                    <ProblemCard
-                                        title="Reverse Linked List"
-                                        topic="Linked List"
-                                        difficulty="Easy"
-                                        status="Solved"
-                                    />
-
-                                </div>
-
-                            </section>
-
-                        </>
                     )}
 
 
-                    {page === "Problems" && (
+                    {/* =========================
+                        DASHBOARD
+                    ========================== */}
 
-                        <Problems
-                            onAnalyze={openAnalyzeCode}
+                    {page === "Dashboard" && (
+
+                        <Dashboard
+
+                            userName={
+                                profile?.name
+                            }
+
+                            setPage={
+                                setPage
+                            }
+
                         />
 
                     )}
 
+
+                    {/* =========================
+                        PRACTICE PROBLEMS
+                    ========================== */}
+
+                    {page === "Practice Problem" && (
+
+                        <Problems
+
+                            onAnalyze={
+                                openAnalyzeCode
+                            }
+
+                        />
+
+                    )}
+
+
+                    {/* =========================
+                        GENERATE & PRACTICE
+                    ========================== */}
+
+                    {page === "Generate & Practice" && (
+
+                        <GeneratePractice />
+
+                    )}
+
+
+                    {/* =========================
+                        ANALYZE CODE
+                    ========================== */}
 
                     {page === "Analyze Code" && (
 
                         <AnalyzeCode
-                            problem={selectedProblem}
+
+                            problem={
+                                selectedProblem
+                            }
+
                         />
 
                     )}
 
 
+                    {/* =========================
+                        OTHER PAGES
+                    ========================== */}
+
                     {page !== "Dashboard" &&
-                        page !== "Problems" &&
+                        page !== "Practice Problem" &&
+                        page !== "Generate & Practice" &&
                         page !== "Analyze Code" && (
 
-                            <section className="page-placeholder">
+                            <section
+                                className="page-placeholder"
+                            >
 
-                                <h2>{page}</h2>
+                                <h2>
+                                    {page}
+                                </h2>
 
                                 <p>
-                                    This section will be built in the next steps.
+                                    This section will be built
+                                    in the next steps.
                                 </p>
 
                             </section>
@@ -299,7 +389,9 @@ function App() {
             </div>
 
         </div>
+
     );
 }
+
 
 export default App;
