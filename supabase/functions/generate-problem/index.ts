@@ -3,6 +3,131 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const GEMINI_MODEL = "gemini-3-flash-preview";
 
+const SUPPORTED_CPP_TYPES = new Set([
+    "int",
+    "long long",
+    "double",
+    "bool",
+    "string",
+    "string&",
+    "vector<int>",
+    "vector<int>&",
+    "vector<string>",
+    "vector<string>&",
+    "vector<vector<int>>",
+    "vector<vector<int>>&",
+    "ListNode*"
+]);
+
+function normalizeCppType(t: string): string {
+    if (!t) return "";
+    let clean = t.trim().replace(/\s+/g, " ");
+    clean = clean.replace(/^const\s+/, "");
+    if (clean.includes("vector<vector<int")) return clean.includes("&") ? "vector<vector<int>>&" : "vector<vector<int>>";
+    if (clean.includes("vector<int")) return clean.includes("&") ? "vector<int>&" : "vector<int>";
+    if (clean.includes("vector<string")) return clean.includes("&") ? "vector<string>&" : "vector<string>";
+    if (clean.includes("vector<double")) return clean.includes("&") ? "vector<double>&" : "vector<double>";
+    if (clean.includes("ListNode")) return "ListNode*";
+    if (clean.includes("TreeNode")) return "TreeNode*";
+    if (clean.includes("long long")) return "long long";
+    if (clean.includes("double") || clean.includes("float")) return "double";
+    if (clean.includes("bool")) return "bool";
+    if (clean.includes("string")) return clean.includes("&") ? "string&" : "string";
+    if (clean.includes("int")) return "int";
+    return clean;
+}
+
+function validateGeneratedProblem(problem: any): { valid: boolean; error?: string; canonicalConfig?: any } {
+    if (!problem.title || typeof problem.title !== "string" || problem.title.trim().length === 0) {
+        return { valid: false, error: "Missing or invalid problem title." };
+    }
+    if (!problem.description || typeof problem.description !== "string" || problem.description.trim().length === 0) {
+        return { valid: false, error: "Missing or invalid problem description." };
+    }
+    if (!Array.isArray(problem.examples) || problem.examples.length !== 2) {
+        return { valid: false, error: "Problem must contain exactly 2 examples." };
+    }
+    if (!Array.isArray(problem.hints) || problem.hints.length !== 3) {
+        return { valid: false, error: "Problem must contain exactly 3 hints." };
+    }
+
+    const spec = problem.functionSpec;
+    if (!spec || typeof spec !== "object") {
+        return { valid: false, error: "Missing canonical function specification (functionSpec)." };
+    }
+
+    const fnName = (spec.functionName || "solve").trim();
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(fnName)) {
+        return { valid: false, error: `Invalid functionName "${fnName}". Must be a valid C++ identifier.` };
+    }
+
+    const normRet = normalizeCppType(spec.returnType || "");
+    const baseRet = normRet.replace("&", "");
+    if (!normRet || !SUPPORTED_CPP_TYPES.has(baseRet)) {
+        return { valid: false, error: `Unsupported returnType "${spec.returnType}". Supported types: int, long long, double, bool, string, vector<int>, vector<string>, vector<vector<int>>, ListNode*.` };
+    }
+
+    if (!Array.isArray(spec.parameters) || spec.parameters.length < 1 || spec.parameters.length > 5) {
+        return { valid: false, error: "parameters must be an array of 1 to 5 parameter objects." };
+    }
+
+    const seenNames = new Set<string>();
+    const canonicalParams: { name: string; type: string }[] = [];
+
+    for (let i = 0; i < spec.parameters.length; i++) {
+        const p = spec.parameters[i];
+        if (!p || typeof p !== "object") {
+            return { valid: false, error: `Parameter at index ${i} is invalid.` };
+        }
+        const pName = (p.name || "").trim();
+        if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(pName)) {
+            return { valid: false, error: `Parameter name "${pName}" at index ${i} is not a valid C++ identifier.` };
+        }
+        if (seenNames.has(pName.toLowerCase())) {
+            return { valid: false, error: `Duplicate parameter name "${pName}". All parameter names must be unique.` };
+        }
+        seenNames.add(pName.toLowerCase());
+
+        const pType = normalizeCppType(p.type || "");
+        if (!pType || !SUPPORTED_CPP_TYPES.has(pType)) {
+            return { valid: false, error: `Unsupported type "${p.type}" for parameter "${pName}".` };
+        }
+
+        canonicalParams.push({ name: pName, type: pType });
+    }
+
+    // Validate examples against parameters and returnType
+    for (let i = 0; i < problem.examples.length; i++) {
+        const ex = problem.examples[i];
+        if (!ex.input || typeof ex.input !== "string" || !ex.output || typeof ex.output !== "string") {
+            return { valid: false, error: `Example ${i + 1} is missing input or output string.` };
+        }
+
+        const inStr = ex.input;
+        // Verify every declared parameter is present in example input if multi-parameter
+        if (canonicalParams.length > 1) {
+            for (const param of canonicalParams) {
+                const paramRegex = new RegExp(`\\b${param.name}\\b\\s*=`);
+                if (!paramRegex.test(inStr)) {
+                    return {
+                        valid: false,
+                        error: `Example ${i + 1} input "${inStr}" is missing parameter "${param.name}". All parameters (${canonicalParams.map(p => p.name).join(", ")}) must be explicitly defined.`
+                    };
+                }
+            }
+        }
+    }
+
+    const canonicalConfig = {
+        functionName: fnName,
+        returnType: normRet,
+        parameters: canonicalParams,
+        comparisonType: "return_value"
+    };
+
+    return { valid: true, canonicalConfig };
+}
+
 export default {
     async fetch(req: Request) {
 
@@ -355,6 +480,21 @@ The problem must contain:
 6. Output Format
 7. Learning Objective
 8. Three progressive hints
+9. Canonical Function Specification ("functionSpec")
+
+CANONICAL FUNCTION SPECIFICATION (CRITICAL CONTRACT):
+Every problem MUST define a single canonical function specification ("functionSpec") defining the C++ method that the student implements inside "class Solution".
+"functionSpec" MUST have:
+1. "functionName": A valid C++ method name (e.g. "solve" or a descriptive camelCase method name).
+2. "returnType": Exactly one supported C++ return type ("int", "long long", "double", "bool", "string", "vector<int>", "vector<string>", "vector<vector<int>>", "ListNode*").
+3. "parameters": An ordered array of 1 to 5 parameter objects, each with:
+   - "name": Valid C++ parameter identifier (e.g. "s", "k", "nums", "target", "prices"). Parameter names must be unique.
+   - "type": Supported C++ type ("int", "long long", "double", "bool", "string", "vector<int>&", "vector<int>", "vector<string>&", "vector<string>", "vector<vector<int>>&", "ListNode*").
+
+CRITICAL SYNCHRONIZATION RULES:
+- "inputFormat" must state the exact parameter types and names matching "functionSpec.parameters" (e.g. "string s, int k" or "vector<int>& nums, int target").
+- Every example in "examples" MUST define its "input" with named parameters for ALL declared parameters in the exact same order (e.g., input: "s = \\"aaabbc\\", k = 2" or "nums = [2, 7, 11, 15], target = 9").
+- Every example in "examples" MUST define its "output" matching the declared "returnType" (e.g. returnType "int" -> output "5"; returnType "bool" -> output "true"; returnType "vector<int>" -> output "[0, 1]").
 
 Examples must be clearly separated.
 
@@ -380,6 +520,20 @@ Return this structure:
     "constraints": "...",
     "inputFormat": "...",
     "outputFormat": "...",
+    "functionSpec": {
+        "functionName": "solve",
+        "returnType": "int",
+        "parameters": [
+            {
+                "name": "s",
+                "type": "string"
+            },
+            {
+                "name": "k",
+                "type": "int"
+            }
+        ]
+    },
     "examples": [
         {
             "input": "...",
@@ -491,6 +645,41 @@ Return this structure:
                                             type: "STRING"
                                         },
 
+                                        functionSpec: {
+                                            type: "OBJECT",
+                                            properties: {
+                                                functionName: {
+                                                    type: "STRING"
+                                                },
+                                                returnType: {
+                                                    type: "STRING"
+                                                },
+                                                parameters: {
+                                                    type: "ARRAY",
+                                                    items: {
+                                                        type: "OBJECT",
+                                                        properties: {
+                                                            name: {
+                                                                type: "STRING"
+                                                            },
+                                                            type: {
+                                                                type: "STRING"
+                                                            }
+                                                        },
+                                                        required: [
+                                                            "name",
+                                                            "type"
+                                                        ]
+                                                    }
+                                                }
+                                            },
+                                            required: [
+                                                "functionName",
+                                                "returnType",
+                                                "parameters"
+                                            ]
+                                        },
+
                                         examples: {
 
                                             type: "ARRAY",
@@ -549,6 +738,7 @@ Return this structure:
                                         "constraints",
                                         "inputFormat",
                                         "outputFormat",
+                                        "functionSpec",
                                         "examples",
                                         "hints",
                                         "learningObjective"
@@ -669,31 +859,23 @@ Return this structure:
 
             /*
              * ----------------------------------------------------
-             * BASIC VALIDATION OF GENERATED PROBLEM
+             * STRICT VALIDATION OF GENERATED PROBLEM & FUNCTION SPEC
              * ----------------------------------------------------
              */
 
-            if (
-                !problem.title ||
-                !problem.description ||
-                !problem.examples ||
-                !Array.isArray(problem.examples) ||
-                problem.examples.length !== 2 ||
-                !problem.hints ||
-                !Array.isArray(problem.hints) ||
-                problem.hints.length !== 3
-            ) {
+            const validation = validateGeneratedProblem(problem);
 
+            if (!validation.valid || !validation.canonicalConfig) {
                 console.error(
-                    "Generated problem does not match required format:",
+                    "Generated problem failed contract validation:",
+                    validation.error,
                     problem
                 );
 
                 return Response.json(
                     {
                         success: false,
-                        error:
-                            "Gemini generated an invalid problem format."
+                        error: `Gemini generated an invalid problem contract: ${validation.error}`
                     },
                     {
                         status: 502,
@@ -703,6 +885,11 @@ Return this structure:
                     }
                 );
             }
+
+            const canonicalConfig = validation.canonicalConfig;
+            const canonicalInputFormat = canonicalConfig.parameters
+                .map((p: { type: string; name: string }) => `${p.type} ${p.name}`)
+                .join(", ");
 
 
             /*
@@ -751,7 +938,7 @@ Return this structure:
                             problem.constraints,
 
                         input_format:
-                            problem.inputFormat,
+                            canonicalInputFormat,
 
                         output_format:
                             problem.outputFormat,
@@ -765,17 +952,8 @@ Return this structure:
                         learning_objective:
                             problem.learningObjective,
 
-                        execution_config: {
-                            functionName: "solve",
-                            returnType: problem.outputFormat?.toLowerCase().includes("bool") ? "bool" : (problem.outputFormat?.toLowerCase().includes("vector") ? "vector<int>" : (problem.outputFormat?.toLowerCase().includes("string") ? "string" : "int")),
-                            parameters: [
-                                {
-                                    name: "nums",
-                                    type: problem.inputFormat?.toLowerCase().includes("vector") ? "vector<int>&" : (problem.inputFormat?.toLowerCase().includes("string") ? "string" : "int")
-                                }
-                            ],
-                            comparisonType: "return_value"
-                        },
+                        execution_config:
+                            canonicalConfig,
 
                         source:
                             "Gemini",

@@ -211,6 +211,14 @@ namespace CodeMedicUtils {
         return res;
     }
 
+    inline string stripQuotes(string s) {
+        string t = trim(s);
+        if (t.size() >= 2 && t.front() == '"' && t.back() == '"') {
+            return t.substr(1, t.size() - 2);
+        }
+        return t;
+    }
+
     inline string normalize(string s) {
         string res;
         for (char c : s) {
@@ -239,20 +247,92 @@ namespace CodeMedicUtils {
  */
 export function normalizeCppType(typeStr) {
     if (!typeStr) return "void";
-    const cleaned = typeStr.trim();
-    if (cleaned.includes("vector<vector<int")) return "vector<vector<int>>";
-    if (cleaned.includes("vector<int")) return "vector<int>";
-    if (cleaned.includes("vector<string")) return "vector<string>";
-    if (cleaned.includes("vector<double")) return "vector<double>";
+    let cleaned = typeStr.trim().replace(/\s+/g, " ");
+    cleaned = cleaned.replace(/^const\s+/, "");
+    if (cleaned.includes("vector<vector<int")) return cleaned.includes("&") ? "vector<vector<int>>&" : "vector<vector<int>>";
+    if (cleaned.includes("vector<int")) return cleaned.includes("&") ? "vector<int>&" : "vector<int>";
+    if (cleaned.includes("vector<string")) return cleaned.includes("&") ? "vector<string>&" : "vector<string>";
+    if (cleaned.includes("vector<double")) return cleaned.includes("&") ? "vector<double>&" : "vector<double>";
     if (cleaned.includes("ListNode")) return "ListNode*";
     if (cleaned.includes("TreeNode")) return "TreeNode*";
     if (cleaned.includes("long long")) return "long long";
     if (cleaned.includes("long")) return "long long";
     if (cleaned.includes("int")) return "int";
-    if (cleaned.includes("string")) return "string";
+    if (cleaned.includes("string")) return cleaned.includes("&") ? "string&" : "string";
     if (cleaned.includes("bool")) return "bool";
     if (cleaned.includes("double") || cleaned.includes("float")) return "double";
     return cleaned;
+}
+
+/**
+ * Extracts named parameter assignments from example inputs (e.g. `s = "aaabbc", k = 2`).
+ */
+export function parseNamedParamsFromExample(inputStr) {
+    if (!inputStr || typeof inputStr !== "string") return [];
+    const parts = [];
+    let cur = "";
+    let bracketDepth = 0;
+    let inQuotes = false;
+    for (let i = 0; i < inputStr.length; i++) {
+        const c = inputStr[i];
+        if (c === '"') inQuotes = !inQuotes;
+        else if (!inQuotes) {
+            if (c === '[' || c === '(' || c === '{') bracketDepth++;
+            else if (c === ']' || c === ')' || c === '}') bracketDepth--;
+            else if ((c === ',' || c === '\n') && bracketDepth === 0) {
+                if (cur.trim()) parts.push(cur.trim());
+                cur = "";
+                continue;
+            }
+        }
+        cur += c;
+    }
+    if (cur.trim()) parts.push(cur.trim());
+
+    const params = [];
+    for (const part of parts) {
+        const eqIdx = part.indexOf('=');
+        if (eqIdx !== -1) {
+            const name = part.slice(0, eqIdx).trim();
+            const val = part.slice(eqIdx + 1).trim();
+            if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
+                let type = "int";
+                if (val.startsWith('"')) type = "string";
+                else if (val.startsWith("[")) {
+                    if (val.includes('"')) type = "vector<string>&";
+                    else if (val.slice(1).includes("[")) type = "vector<vector<int>>&";
+                    else type = "vector<int>&";
+                } else if (val === "true" || val === "false") type = "bool";
+                else if (val.includes(".")) type = "double";
+                else if (/^-?\d+$/.test(val)) {
+                    type = Math.abs(Number(val)) > 2147483647 ? "long long" : "int";
+                }
+                params.push({ name, type });
+            }
+        }
+    }
+    return params;
+}
+
+/**
+ * Safely infers return type from example output or problem metadata.
+ */
+export function inferReturnTypeFromExample(problem) {
+    const exOut = (problem?.examples?.[0]?.output || "").trim();
+    if (exOut.startsWith('"')) return "string";
+    if (exOut.startsWith("[")) return "vector<int>";
+    if (exOut === "true" || exOut === "false") return "bool";
+    if (exOut.includes(".")) return "double";
+    if (/^-?\d+$/.test(exOut)) {
+        return Math.abs(Number(exOut)) > 2147483647 ? "long long" : "int";
+    }
+
+    const outFmt = (problem?.output_format || problem?.outputFormat || "").toLowerCase();
+    if (outFmt.includes("bool") || outFmt.includes("true") || outFmt.includes("false")) return "bool";
+    if (outFmt.includes("string")) return "string";
+    if (outFmt.includes("vector") || outFmt.includes("array")) return "vector<int>";
+    if (outFmt.includes("long")) return "long long";
+    return "int";
 }
 
 /**
@@ -344,14 +424,54 @@ export function parseSolutionSignature(studentCode) {
  * Infers an execution configuration from problem metadata if none is provided.
  */
 export function inferExecutionConfig(problem) {
-    if (problem?.execution_config && typeof problem.execution_config === "object") {
-        return problem.execution_config;
+    if (!problem) {
+        return {
+            functionName: "solve",
+            returnType: "int",
+            parameters: [],
+            comparisonType: "return_value"
+        };
     }
 
-    const title = (problem?.title || "").toLowerCase();
-    const topic = (problem?.topic || "").toLowerCase();
+    // 1. Check if canonical execution_config is already attached
+    if (problem.execution_config && typeof problem.execution_config === "object") {
+        const cfg = problem.execution_config;
+        if (Array.isArray(cfg.parameters) && cfg.parameters.length > 0) {
+            // Check if this was a legacy generated problem with the hardcoded dummy single 'nums' parameter
+            if (problem.is_generated && cfg.parameters.length === 1 && cfg.parameters[0].name === "nums") {
+                const exIn = problem.examples?.[0]?.input || "";
+                const candidate = parseNamedParamsFromExample(exIn);
+                if (candidate.length > 0 && (candidate.length > 1 || candidate[0].name !== "nums")) {
+                    return {
+                        functionName: cfg.functionName || "solve",
+                        returnType: inferReturnTypeFromExample(problem),
+                        parameters: candidate,
+                        comparisonType: "return_value"
+                    };
+                }
+            }
+            return cfg;
+        }
+    }
 
-    // Specific problem heuristics (broad matching)
+    // 2. If problem has examples, safely reconstruct from example inputs & outputs
+    if (Array.isArray(problem.examples) && problem.examples.length > 0) {
+        const exIn = problem.examples[0]?.input || "";
+        const candidate = parseNamedParamsFromExample(exIn);
+        if (candidate.length > 0) {
+            return {
+                functionName: "solve",
+                returnType: inferReturnTypeFromExample(problem),
+                parameters: candidate,
+                comparisonType: "return_value"
+            };
+        }
+    }
+
+    // 3. Fallback matching for curated permanent library problems
+    const title = (problem.title || "").toLowerCase();
+    const topic = (problem.topic || "").toLowerCase();
+
     if (title.includes("two sum") || title.includes("target sum") || title.includes("pair with") || title.includes("find pair")) {
         return {
             functionName: "twoSum",
@@ -454,18 +574,18 @@ export function inferExecutionConfig(problem) {
         };
     }
 
-    // Generic defaults based on topic
-    if (topic.includes("array") || topic.includes("pointer") || topic.includes("sliding")) {
+    // 4. If generated problem cannot be safely parsed, mark as requiring regeneration
+    if (problem.is_generated) {
         return {
             functionName: "solve",
             returnType: "int",
-            parameters: [
-                { name: "nums", type: "vector<int>&" }
-            ],
-            comparisonType: "return_value"
+            parameters: [],
+            comparisonType: "return_value",
+            requiresRegeneration: true
         };
     }
 
+    // Curated generic fallback
     if (topic.includes("string")) {
         return {
             functionName: "solve",
@@ -492,6 +612,16 @@ export function inferExecutionConfig(problem) {
  */
 export function generateStarterCode(problem) {
     const config = inferExecutionConfig(problem);
+    if (config.requiresRegeneration) {
+        return `// This legacy generated problem does not contain a canonical function specification.
+// Please regenerate this problem using the Practice Generator.
+class Solution {
+public:
+    // Function specification unavailable for this legacy problem
+};
+`;
+    }
+
     const paramsStr = (config.parameters || [])
         .map(p => `${p.type} ${p.name}`)
         .join(", ");
@@ -579,25 +709,21 @@ export function extractTestCases(problem, rawTestCases = []) {
  * Generates the full C++ harness string including student code and a test runner in main().
  */
 export function generateCppHarness(studentCode, problem, testCases = []) {
-    // 1. First prioritize dynamic signature parsed directly from student's code
-    const parsedSig = parseSolutionSignature(studentCode);
-    const config = (parsedSig && parsedSig.functionName)
-        ? parsedSig
-        : inferExecutionConfig(problem);
-
+    // 1. Canonical problem configuration is the single source of truth
+    const config = inferExecutionConfig(problem);
     const resolvedCases = extractTestCases(problem, testCases);
     const params = config.parameters || [];
 
     // Helper to generate parsing code for each parameter
     function generateParamParser(type, rawVarName, targetVarName) {
         const norm = normalizeCppType(type);
-        if (norm === "vector<int>" || norm === "vector<int>&") {
+        if (norm.startsWith("vector<int>")) {
             return `vector<int> ${targetVarName} = CodeMedicUtils::parseVectorInt(${rawVarName});`;
         }
-        if (norm === "vector<string>" || norm === "vector<string>&") {
+        if (norm.startsWith("vector<string>")) {
             return `vector<string> ${targetVarName} = CodeMedicUtils::parseVectorString(${rawVarName});`;
         }
-        if (norm === "vector<vector<int>>" || norm === "vector<vector<int>>&") {
+        if (norm.startsWith("vector<vector<int>>")) {
             return `vector<vector<int>> ${targetVarName} = CodeMedicUtils::parseVectorVectorInt(${rawVarName});`;
         }
         if (norm === "ListNode*") {
@@ -627,110 +753,104 @@ export function generateCppHarness(studentCode, problem, testCases = []) {
     });
     testCasesCpp += `};\n\n`;
 
-    // Build the invocation inside the runner loop
+    // Universal multi-parameter runner invocation
     let runnerInvocation = "";
-    if (params.length === 1) {
+    if (params.length === 0) {
         runnerInvocation = `
             string rawIn = tc.rawInput;
-            // Strip parameter label if present (e.g. nums = [1,2,3] or prices = [7,1,5])
-            size_t eqPos = rawIn.find('=');
-            if (eqPos != string::npos) {
-                bool hasBracketBefore = false;
-                for (size_t k = 0; k < eqPos; ++k) {
-                    if (rawIn[k] == '[' || rawIn[k] == '"') { hasBracketBefore = true; break; }
-                }
-                if (!hasBracketBefore) rawIn = rawIn.substr(eqPos + 1);
-            }
-
-            ${generateParamParser(params[0].type, "rawIn", "p0")}
             auto start = chrono::high_resolution_clock::now();
-            auto actualResult = solver.${config.functionName}(p0);
-            auto end = chrono::high_resolution_clock::now();
-            double durationMs = chrono::duration<double, milli>(end - start).count();
-            string actualStr = CodeMedicUtils::serialize(actualResult);
-        `;
-    } else if (params.length === 2) {
-        runnerInvocation = `
-            // Parse two parameters: try newline separation first, then comma outside brackets
-            string rawIn = tc.rawInput;
-            string s0 = rawIn, s1 = "";
-            size_t nlPos = rawIn.find('\\n');
-            if (nlPos != string::npos) {
-                s0 = rawIn.substr(0, nlPos);
-                s1 = rawIn.substr(nlPos + 1);
-            } else {
-                int bracketDepth = 0;
-                size_t splitPos = string::npos;
-                for (size_t k = 0; k < rawIn.size(); ++k) {
-                    if (rawIn[k] == '[' || rawIn[k] == '(') bracketDepth++;
-                    else if (rawIn[k] == ']' || rawIn[k] == ')') bracketDepth--;
-                    else if (rawIn[k] == ',' && bracketDepth == 0) {
-                        splitPos = k;
-                        break;
-                    }
-                }
-                if (splitPos != string::npos) {
-                    s0 = rawIn.substr(0, splitPos);
-                    s1 = rawIn.substr(splitPos + 1);
-                }
-            }
-
-            // Strip param labels if present (e.g. nums = [1,2], target = 3)
-            size_t eq0 = s0.find('=');
-            if (eq0 != string::npos) s0 = s0.substr(eq0 + 1);
-            size_t eq1 = s1.find('=');
-            if (eq1 != string::npos) s1 = s1.substr(eq1 + 1);
-
-            ${generateParamParser(params[0].type, "s0", "p0")}
-            ${generateParamParser(params[1].type, "s1", "p1")}
-
-            auto start = chrono::high_resolution_clock::now();
-            auto actualResult = solver.${config.functionName}(p0, p1);
-            auto end = chrono::high_resolution_clock::now();
-            double durationMs = chrono::duration<double, milli>(end - start).count();
-            string actualStr = CodeMedicUtils::serialize(actualResult);
-        `;
-    } else if (params.length === 3) {
-        runnerInvocation = `
-            string rawIn = tc.rawInput;
-            vector<string> parts;
-            int bracketDepth = 0;
-            size_t lastPos = 0;
-            for (size_t k = 0; k < rawIn.size(); ++k) {
-                if (rawIn[k] == '[' || rawIn[k] == '(') bracketDepth++;
-                else if (rawIn[k] == ']' || rawIn[k] == ')') bracketDepth--;
-                else if ((rawIn[k] == ',' || rawIn[k] == '\\n') && bracketDepth == 0) {
-                    parts.push_back(rawIn.substr(lastPos, k - lastPos));
-                    lastPos = k + 1;
-                }
-            }
-            if (lastPos < rawIn.size()) parts.push_back(rawIn.substr(lastPos));
-
-            string s0 = parts.size() > 0 ? parts[0] : "";
-            string s1 = parts.size() > 1 ? parts[1] : "";
-            string s2 = parts.size() > 2 ? parts[2] : "";
-
-            if (s0.find('=') != string::npos) s0 = s0.substr(s0.find('=') + 1);
-            if (s1.find('=') != string::npos) s1 = s1.substr(s1.find('=') + 1);
-            if (s2.find('=') != string::npos) s2 = s2.substr(s2.find('=') + 1);
-
-            ${generateParamParser(params[0].type, "s0", "p0")}
-            ${generateParamParser(params[1].type, "s1", "p1")}
-            ${generateParamParser(params[2].type, "s2", "p2")}
-
-            auto start = chrono::high_resolution_clock::now();
-            auto actualResult = solver.${config.functionName}(p0, p1, p2);
+            auto actualResult = solver.${config.functionName}();
             auto end = chrono::high_resolution_clock::now();
             double durationMs = chrono::duration<double, milli>(end - start).count();
             string actualStr = CodeMedicUtils::serialize(actualResult);
         `;
     } else {
-        runnerInvocation = `
-            string rawIn = tc.rawInput;
+        const paramExtractors = params.map((p, idx) => `
+            string arg${idx} = (paramParts.size() > ${idx}) ? paramParts[${idx}] : "";
+            {
+                size_t eqPos = string::npos;
+                bool inQ = false;
+                int bDepth = 0;
+                for (size_t k = 0; k < arg${idx}.size(); ++k) {
+                    char ch = arg${idx}[k];
+                    if (ch == '"') inQ = !inQ;
+                    else if (!inQ) {
+                        if (ch == '[' || ch == '(' || ch == '{') bDepth++;
+                        else if (ch == ']' || ch == ')' || ch == '}') bDepth--;
+                        else if (ch == '=' && bDepth == 0) {
+                            eqPos = k;
+                            break;
+                        }
+                    }
+                }
+                if (eqPos != string::npos) {
+                    arg${idx} = CodeMedicUtils::trim(arg${idx}.substr(eqPos + 1));
+                }
+            }
+            ${generateParamParser(p.type, `arg${idx}`, `p${idx}`)}
+        `).join("\n");
+
+        const argsList = params.map((_, idx) => `p${idx}`).join(", ");
+        const invokeBlock = (config.returnType === "void")
+            ? `
             auto start = chrono::high_resolution_clock::now();
-            string actualStr = "Ran successfully";
+            solver.${config.functionName}(${argsList});
             auto end = chrono::high_resolution_clock::now();
             double durationMs = chrono::duration<double, milli>(end - start).count();
+            string actualStr = ${params.length > 0 ? `CodeMedicUtils::serialize(p0)` : `"Finished"`};
+            `
+            : `
+            auto start = chrono::high_resolution_clock::now();
+            auto actualResult = solver.${config.functionName}(${argsList});
+            auto end = chrono::high_resolution_clock::now();
+            double durationMs = chrono::duration<double, milli>(end - start).count();
+            string actualStr = CodeMedicUtils::serialize(actualResult);
+            `;
+
+        runnerInvocation = `
+            string rawIn = tc.rawInput;
+            vector<string> paramParts;
+            int bracketDepth = 0;
+            bool inQuotes = false;
+            bool escaped = false;
+            string curPart = "";
+
+            for (size_t k = 0; k < rawIn.size(); ++k) {
+                char c = rawIn[k];
+                if (escaped) {
+                    curPart += c;
+                    escaped = false;
+                    continue;
+                }
+                if (c == '\\\\') {
+                    curPart += c;
+                    escaped = true;
+                    continue;
+                }
+                if (c == '"') {
+                    inQuotes = !inQuotes;
+                    curPart += c;
+                    continue;
+                }
+                if (!inQuotes) {
+                    if (c == '[' || c == '(' || c == '{') {
+                        bracketDepth++;
+                    } else if (c == ']' || c == ')' || c == '}') {
+                        bracketDepth--;
+                    } else if ((c == ',' || c == '\\n') && bracketDepth == 0) {
+                        paramParts.push_back(CodeMedicUtils::trim(curPart));
+                        curPart = "";
+                        continue;
+                    }
+                }
+                curPart += c;
+            }
+            if (!curPart.empty() || paramParts.empty()) {
+                paramParts.push_back(CodeMedicUtils::trim(curPart));
+            }
+
+            ${paramExtractors}
+            ${invokeBlock}
         `;
     }
 
@@ -776,7 +896,8 @@ int main() {
             } else if (tc.expectedOutput.empty()) {
                 passed = true;
             } else {
-                passed = (CodeMedicUtils::normalize(actualStr) == CodeMedicUtils::normalize(tc.expectedOutput));
+                passed = (CodeMedicUtils::normalize(actualStr) == CodeMedicUtils::normalize(tc.expectedOutput) ||
+                          CodeMedicUtils::normalize(CodeMedicUtils::stripQuotes(actualStr)) == CodeMedicUtils::normalize(CodeMedicUtils::stripQuotes(tc.expectedOutput)));
             }
 
             cout << "  {\\n";

@@ -3,7 +3,7 @@ import { supabase } from "../lib/supabase";
 import { analyzeSubmittedCode } from "../services/codeAnalysis";
 import { analyzeWithAI } from "../services/aiAnalysis";
 import { executeStudentSolution, preloadCppExecutor } from "../services/cppExecutor";
-import { generateStarterCode } from "../services/executionHarness";
+import { generateStarterCode, inferExecutionConfig } from "../services/executionHarness";
 
 function AnalyzeCode({ problem, setPage }) {
     useEffect(() => {
@@ -237,6 +237,12 @@ function AnalyzeCode({ problem, setPage }) {
 
         if (!problem) {
             alert("Please select a problem first.");
+            return;
+        }
+
+        const problemConfig = inferExecutionConfig(problem);
+        if (problemConfig?.requiresRegeneration) {
+            alert("This legacy generated problem does not contain a canonical function specification. Please generate a new problem from the Practice Generator.");
             return;
         }
 
@@ -511,6 +517,7 @@ function AnalyzeCode({ problem, setPage }) {
 
     const lineCount = code === "" ? 0 : code.split("\n").length;
     const analysisHints = Array.isArray(analysis?.hints) ? analysis.hints : [];
+    const problemConfig = inferExecutionConfig(problem);
 
     // Helper to get status color badge
     function getStatusBadgeStyle(status) {
@@ -713,6 +720,21 @@ function AnalyzeCode({ problem, setPage }) {
 
                     <div className="problem-topic">{problem?.topic || "DSA"}</div>
 
+                    {problemConfig?.requiresRegeneration && (
+                        <div style={{
+                            background: "rgba(245, 158, 11, 0.15)",
+                            border: "1px solid #f59e0b",
+                            color: "#fcd34d",
+                            padding: "12px 16px",
+                            borderRadius: "8px",
+                            margin: "12px 0 16px 0",
+                            fontSize: "14px",
+                            lineHeight: "1.5"
+                        }}>
+                            ⚠️ <strong>Function Specification Missing:</strong> This legacy problem does not define a canonical function specification. Please generate a new problem from the Practice Generator.
+                        </div>
+                    )}
+
                     {/* EXAMPLES */}
                     {examples.length > 0 && (
                         <div className="problem-detail-section">
@@ -823,16 +845,17 @@ function AnalyzeCode({ problem, setPage }) {
                         <button
                             className="run-button"
                             style={{
-                                background: "#059669",
+                                background: problemConfig?.requiresRegeneration ? "#475569" : "#059669",
                                 color: "#fff",
                                 padding: "10px 20px",
                                 borderRadius: "8px",
                                 border: "none",
                                 fontWeight: "600",
-                                cursor: (code.trim() === "" || isExecuting) ? "not-allowed" : "pointer"
+                                cursor: (code.trim() === "" || isExecuting || problemConfig?.requiresRegeneration) ? "not-allowed" : "pointer"
                             }}
                             onClick={handleRunCode}
-                            disabled={code.trim() === "" || isExecuting}
+                            disabled={code.trim() === "" || isExecuting || problemConfig?.requiresRegeneration}
+                            title={problemConfig?.requiresRegeneration ? "This legacy problem requires regeneration" : undefined}
                         >
                             {isExecuting ? "Compiling & Running..." : "▶ Run Code"}
                         </button>
