@@ -1,21 +1,26 @@
 import { useState } from "react";
 import { supabase } from "../lib/supabase";
 
-function Navbar({ onMenuClick }) {
+function Navbar({ onMenuClick, setPage, profile, user }) {
 
     const [showProfile, setShowProfile] = useState(false);
 
+    const displayName = profile?.name || user?.user_metadata?.name || user?.email?.split("@")[0] || "CodeMedic Solver";
+    const initials = displayName.charAt(0).toUpperCase();
+    const role = profile?.role || "Student";
+
     async function handleLogout() {
-
-        const { error } =
-            await supabase.auth.signOut();
-
+        const { error } = await supabase.auth.signOut();
         if (error) {
-            console.error(
-                "Logout error:",
-                error
-            );
+            console.error("Logout error:", error);
         }
+    }
+
+    function handleNavigate(target) {
+        if (setPage) {
+            setPage(target);
+        }
+        setShowProfile(false);
     }
 
     return (
@@ -34,7 +39,7 @@ function Navbar({ onMenuClick }) {
 
             {/* BRAND */}
 
-            <div className="brand">
+            <div className="brand" onClick={() => setPage && setPage("Dashboard")} style={{ cursor: "pointer" }}>
 
                 <div className="brand-icon">
                     &lt;/&gt;
@@ -104,13 +109,21 @@ function Navbar({ onMenuClick }) {
                     >
 
                         <div className="profile-avatar">
-                            P
+                            {profile?.avatar_url ? (
+                                <img
+                                    src={profile.avatar_url}
+                                    alt={displayName}
+                                    style={{ width: "100%", height: "100%", borderRadius: "50%", objectFit: "cover" }}
+                                />
+                            ) : (
+                                initials
+                            )}
                         </div>
 
                         <div className="profile-info">
 
                             <strong>
-                                Prakash Kumar
+                                {displayName}
                             </strong>
 
                             <span>
@@ -133,20 +146,20 @@ function Navbar({ onMenuClick }) {
                             <div className="profile-menu-header">
 
                                 <strong>
-                                    Prakash Kumar
+                                    {displayName}
                                 </strong>
 
                                 <span>
-                                    Student
+                                    {role}
                                 </span>
 
                             </div>
 
-                            <button>
+                            <button onClick={() => handleNavigate("Profile")}>
                                 Profile
                             </button>
 
-                            <button>
+                            <button onClick={() => handleNavigate("Settings")}>
                                 Settings
                             </button>
 

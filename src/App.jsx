@@ -13,7 +13,10 @@ import Dashboard from "./components/Dashboard";
 import DSAHealth from "./components/DSAHealth";
 import Progress from "./components/Progress";
 import Revision from "./components/Revision";
+import Profile from "./components/Profile";
+import Settings from "./components/Settings";
 import { preloadCppExecutor } from "./services/cppExecutor";
+import { getUserProfile } from "./services/profileService";
 
 function App() {
     useEffect(() => {
@@ -28,22 +31,14 @@ function App() {
     const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
     /*
-        Get the user's profile from public.users
+        Get the user's unified profile
     */
     async function fetchProfile(userId) {
         try {
-            const { data, error } = await supabase
-                .from("users")
-                .select("*")
-                .eq("id", userId)
-                .single();
-
-            if (error) {
-                console.warn("Profile fetch note:", error.message);
-                return;
+            const data = await getUserProfile(userId);
+            if (data) {
+                setProfile(data);
             }
-
-            setProfile(data);
         } catch (err) {
             console.error("Profile fetch error:", err);
         }
@@ -141,6 +136,9 @@ function App() {
         <div className="app">
             <Navbar
                 onMenuClick={() => setMobileSidebarOpen(true)}
+                setPage={setPage}
+                profile={profile}
+                user={session?.user}
             />
 
             <div className="layout">
@@ -152,7 +150,7 @@ function App() {
                 />
 
                 <main className="main-content">
-                    {page !== "Generate & Practice" && (
+                    {page !== "Generate & Practice" && page !== "Profile" && page !== "Settings" && (
                         <h1 className="page-title">{page}</h1>
                     )}
 
@@ -201,23 +199,20 @@ function App() {
                         />
                     )}
 
+                    {page === "Profile" && (
+                        <Profile
+                            user={session.user}
+                            setPage={setPage}
+                            onProfileUpdated={(updated) => setProfile(updated)}
+                        />
+                    )}
+
                     {page === "Settings" && (
-                        <section className="page-placeholder" style={{ padding: "30px", background: "rgba(30, 41, 59, 0.5)", borderRadius: "10px" }}>
-                            <h2>Account Settings</h2>
-                            <p style={{ color: "#94a3b8", marginTop: "8px" }}>
-                                Logged in as: <strong style={{ color: "#fff" }}>{session.user.email}</strong>
-                            </p>
-                            <p style={{ color: "#94a3b8" }}>
-                                User ID: <code style={{ color: "#38bdf8" }}>{session.user.id}</code>
-                            </p>
-                            <button
-                                className="retry-button"
-                                style={{ marginTop: "16px", background: "#ef4444" }}
-                                onClick={() => supabase.auth.signOut()}
-                            >
-                                Sign Out
-                            </button>
-                        </section>
+                        <Settings
+                            user={session.user}
+                            setPage={setPage}
+                            onProfileUpdated={(updated) => setProfile(updated)}
+                        />
                     )}
                 </main>
             </div>

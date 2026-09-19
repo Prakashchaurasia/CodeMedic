@@ -228,6 +228,24 @@ function Sidebar({
                         ACCOUNT
                     </div>
 
+                    <button
+                        className={
+                            page === "Profile"
+                                ? "active"
+                                : ""
+                        }
+                        onClick={() =>
+                            navigate("Profile")
+                        }
+                    >
+                        <span className="nav-icon">
+                            👤
+                        </span>
+
+                        <span>
+                            Profile
+                        </span>
+                    </button>
 
                     <button
                         className={

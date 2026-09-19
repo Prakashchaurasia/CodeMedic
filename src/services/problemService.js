@@ -1,4 +1,5 @@
 import { supabase } from "../lib/supabase";
+import { ALL_EXPANDED_PROBLEMS } from "../data/problems/index.js";
 
 export const CURATED_PERMANENT_PROBLEMS = [
     {
@@ -337,20 +338,37 @@ export async function getProblemsForUser(userId) {
         // Attempt to seed if empty
         await seedPermanentProblemsIfEmpty();
 
-        // 1. Fetch problems
+        // 1. Fetch problems from DB
         const { data: dbProblems, error: probError } = await supabase
             .from("problems")
             .select("*")
+            .range(0, 999)
             .order("created_at", { ascending: false });
 
-        let allProblems = dbProblems || [];
+        const problemMap = new Map();
 
-        // If DB returned nothing, fallback to curated in-memory list
-        if (allProblems.length === 0) {
-            allProblems = CURATED_PERMANENT_PROBLEMS.map((p) => ({
-                ...p
-            }));
+        // Populate baseline curated permanent problems
+        for (const p of CURATED_PERMANENT_PROBLEMS) {
+            problemMap.set(p.id, { ...p });
         }
+
+        // Populate 455 expanded problems
+        for (const p of ALL_EXPANDED_PROBLEMS) {
+            problemMap.set(p.id, { ...p });
+        }
+
+        // Overlay records from DB (includes user-generated problems and any DB updates)
+        if (dbProblems && Array.isArray(dbProblems)) {
+            for (const p of dbProblems) {
+                const existing = problemMap.get(p.id) || {};
+                problemMap.set(p.id, {
+                    ...existing,
+                    ...p
+                });
+            }
+        }
+
+        const allProblems = Array.from(problemMap.values());
 
         // Filter problems: curated problems are shared, generated problems only for owner
         const userAccessibleProblems = allProblems.filter(p => 
@@ -393,7 +411,7 @@ export async function getProblemsForUser(userId) {
 
     } catch (err) {
         console.error("Error in getProblemsForUser:", err);
-        return CURATED_PERMANENT_PROBLEMS.map((p) => ({
+        return [...CURATED_PERMANENT_PROBLEMS, ...ALL_EXPANDED_PROBLEMS].map((p) => ({
             ...p,
             status: "Not Solved"
         }));
