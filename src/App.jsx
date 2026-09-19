@@ -17,6 +17,7 @@ import Profile from "./components/Profile";
 import Settings from "./components/Settings";
 import { preloadCppExecutor } from "./services/cppExecutor";
 import { getUserProfile } from "./services/profileService";
+import { parseAuthUrlParams, clearAuthUrlParams } from "./services/authService";
 
 function App() {
     useEffect(() => {
@@ -26,6 +27,7 @@ function App() {
     const [profile, setProfile] = useState(null);
     const [loading, setLoading] = useState(true);
     const [showSignup, setShowSignup] = useState(false);
+    const [authNotification, setAuthNotification] = useState(null);
     const [page, setPage] = useState("Dashboard");
     const [selectedProblem, setSelectedProblem] = useState(null);
     const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -45,15 +47,24 @@ function App() {
     }
 
     /*
-        Check the current Supabase authentication session
+        Check the current Supabase authentication session and URL callback state
     */
     useEffect(() => {
+        // 1. Inspect URL for auth error callback or expired tokens
+        const authParams = parseAuthUrlParams();
+        if (authParams.hasError) {
+            setAuthNotification(authParams.userFriendlyMessage);
+            clearAuthUrlParams();
+        }
+
         async function getSession() {
             try {
                 const { data } = await supabase.auth.getSession();
                 setSession(data.session);
 
                 if (data.session) {
+                    setAuthNotification(null);
+                    clearAuthUrlParams();
                     await fetchProfile(data.session.user.id);
                 }
             } catch (err) {
@@ -74,6 +85,8 @@ function App() {
             setSession(newSession);
 
             if (newSession) {
+                setAuthNotification(null);
+                clearAuthUrlParams();
                 fetchProfile(newSession.user.id);
             } else {
                 setProfile(null);
@@ -114,15 +127,23 @@ function App() {
         if (showSignup) {
             return (
                 <Signup
-                    onSwitchToLogin={() => setShowSignup(false)}
+                    onSwitchToLogin={() => {
+                        setAuthNotification(null);
+                        setShowSignup(false);
+                    }}
                 />
             );
         }
 
         return (
             <Login
-                onSwitchToSignup={() => setShowSignup(true)}
+                initialError={authNotification}
+                onSwitchToSignup={() => {
+                    setAuthNotification(null);
+                    setShowSignup(true);
+                }}
                 onLoginSuccess={(user) => {
+                    setAuthNotification(null);
                     console.log("Logged in user:", user);
                 }}
             />

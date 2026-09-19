@@ -1,4 +1,5 @@
 import { supabase } from "../lib/supabase.js";
+import { getAuthRedirectUrl } from "./authService.js";
 
 const LOCAL_STORAGE_KEY_PREFIX = "codemedic_profile_";
 
@@ -182,13 +183,16 @@ export async function updateNotificationSettings(userId, notificationUpdates) {
 }
 
 /**
- * Update user email in Supabase Auth.
+ * Update user email in Supabase Auth with environment-aware redirect.
  */
 export async function updateUserEmail(newEmail) {
     if (!newEmail || !newEmail.includes("@")) {
         throw new Error("Please enter a valid email address.");
     }
-    const { data, error } = await supabase.auth.updateUser({ email: newEmail });
+    const { data, error } = await supabase.auth.updateUser(
+        { email: newEmail },
+        { emailRedirectTo: getAuthRedirectUrl() }
+    );
     if (error) throw error;
     return data;
 }

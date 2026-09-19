@@ -6,7 +6,7 @@ const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '..');
 
 const harnessPath = path.join(ROOT_DIR, 'src', 'services', 'executionHarness.js');
-const { generateCPlusPlusHarness } = await import(pathToFileURL(harnessPath).href);
+const { generateCppHarness } = await import(pathToFileURL(harnessPath).href);
 
 const problemsIndexPath = path.join(ROOT_DIR, 'src', 'data', 'problems', 'index.js');
 const { ALL_EXPANDED_PROBLEMS } = await import(pathToFileURL(problemsIndexPath).href);
@@ -38,7 +38,7 @@ for (const p of ALL_EXPANDED_PROBLEMS) {
     // Test testcase code generation with executionHarness
     try {
         const dummyCode = `class Solution {\npublic:\n};\n`;
-        const harness = generateCPlusPlusHarness(dummyCode, p);
+        const harness = generateCppHarness(dummyCode, p);
         if (!harness.includes("int main()") || !harness.includes(p.execution_config.functionName)) {
             console.error(`Harness generation anomaly for: ${p.title}`);
             errors++;

@@ -76,8 +76,8 @@ enabled = true
 # React/Vite development server
 site_url = "http://localhost:5173"
 
-# Allowed redirect URL for local development
-additional_redirect_urls = ["http://localhost:5173"]
+# Allowed redirect URL for local development and production
+additional_redirect_urls = ["http://localhost:5173", "http://localhost:5174", "https://code-medic-xi.vercel.app"]
 
 jwt_expiry = 3600
 enable_refresh_token_rotation = true

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { supabase } from "../lib/supabase";
+import { signUpUser, resendVerificationEmail } from "../services/authService";
 
 function Signup({ onSwitchToLogin }) {
     const [name, setName] = useState("");
@@ -10,12 +10,16 @@ function Signup({ onSwitchToLogin }) {
     const [loading, setLoading] = useState(false);
     const [message, setMessage] = useState("");
     const [error, setError] = useState("");
+    const [registeredEmail, setRegisteredEmail] = useState("");
+    const [resending, setResending] = useState(false);
+    const [resendSuccess, setResendSuccess] = useState(false);
 
     async function handleSignup(event) {
         event.preventDefault();
 
         setMessage("");
         setError("");
+        setResendSuccess(false);
 
         if (!name.trim()) {
             setError("Please enter your name.");
@@ -39,14 +43,11 @@ function Signup({ onSwitchToLogin }) {
 
         setLoading(true);
 
-        const { error: signupError } = await supabase.auth.signUp({
-            email: email.trim(),
+        const targetEmail = email.trim();
+        const { error: signupError } = await signUpUser({
+            email: targetEmail,
             password: password,
-            options: {
-                data: {
-                    name: name.trim(),
-                },
-            },
+            name: name.trim(),
         });
 
         setLoading(false);
@@ -56,6 +57,7 @@ function Signup({ onSwitchToLogin }) {
             return;
         }
 
+        setRegisteredEmail(targetEmail);
         setMessage(
             "Account created successfully! Please check your email and verify your account."
         );
@@ -64,6 +66,21 @@ function Signup({ onSwitchToLogin }) {
         setEmail("");
         setPassword("");
         setConfirmPassword("");
+    }
+
+    async function handleResend() {
+        if (!registeredEmail) return;
+        setResending(true);
+        setError("");
+        try {
+            await resendVerificationEmail(registeredEmail);
+            setResendSuccess(true);
+            setMessage("Verification email has been resent! Please check your inbox and spam folder.");
+        } catch (err) {
+            setError(err?.message || "Failed to resend verification email. Please try again.");
+        } finally {
+            setResending(false);
+        }
     }
 
     return (
@@ -134,9 +151,33 @@ function Signup({ onSwitchToLogin }) {
                     )}
 
                     {message && (
-                        <p className="auth-success">
-                            {message}
-                        </p>
+                        <div style={{ marginBottom: "16px" }}>
+                            <p className="auth-success" style={{ margin: "0 0 8px 0" }}>
+                                {message}
+                            </p>
+                            {registeredEmail && (
+                                <div style={{ fontSize: "13px", color: "#94a3b8", textAlign: "center" }}>
+                                    <span>Didn't receive the link? </span>
+                                    <button
+                                        type="button"
+                                        onClick={handleResend}
+                                        disabled={resending}
+                                        style={{
+                                            background: "transparent",
+                                            border: "none",
+                                            color: "#38bdf8",
+                                            textDecoration: "underline",
+                                            cursor: resending ? "not-allowed" : "pointer",
+                                            padding: 0,
+                                            fontSize: "13px",
+                                            fontWeight: "500"
+                                        }}
+                                    >
+                                        {resending ? "Resending..." : (resendSuccess ? "Resend again" : "Resend Verification Email")}
+                                    </button>
+                                </div>
+                            )}
+                        </div>
                     )}
 
                     <button
