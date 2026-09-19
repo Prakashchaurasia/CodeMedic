@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { supabase } from "../lib/supabase";
 
-function GeneratePractice() {
+function GeneratePractice({ onStartCoding }) {
 
     const [topic, setTopic] = useState("");
     const [difficulty, setDifficulty] = useState("");
@@ -12,6 +12,20 @@ function GeneratePractice() {
     const [generatedProblem, setGeneratedProblem] = useState(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
+
+    /*
+     * STEP 29
+     *
+     * Status of hidden test-case generation.
+     *
+     * We keep this separate from the main loading state
+     * so the UI can tell the user that the problem has been
+     * created and its hidden tests are now being prepared.
+     */
+
+    const [testCaseStatus, setTestCaseStatus] = useState("");
+    const [testCaseCount, setTestCaseCount] = useState(0);
+
 
     async function handleGenerate() {
 
@@ -24,6 +38,49 @@ function GeneratePractice() {
         setError("");
         setGeneratedProblem(null);
 
+        setTestCaseStatus("");
+        setTestCaseCount(0);
+
+
+        /*
+         * ============================================================
+         * STEP 1
+         * Get the currently logged-in user's session.
+         * ============================================================
+         *
+         * We need the access token because both Edge Functions
+         * require an authenticated user.
+         */
+
+        const {
+            data: { session },
+            error: sessionError
+        } = await supabase.auth.getSession();
+
+
+        if (sessionError || !session) {
+
+            console.error(
+                "Session error:",
+                sessionError
+            );
+
+            setError(
+                "Your login session has expired. Please log in again."
+            );
+
+            setLoading(false);
+            return;
+        }
+
+
+        /*
+         * ============================================================
+         * STEP 2
+         * Prepare problem-generation requirements.
+         * ============================================================
+         */
+
         const requirements = {
             topic,
             difficulty,
@@ -32,27 +89,66 @@ function GeneratePractice() {
             complexity
         };
 
+
         console.log(
             "Sending problem generation request:",
             requirements
         );
 
-        const { data, error } =
-            await supabase.functions.invoke(
-                "generate-problem",
-                {
-                    body: requirements
-                }
-            );
 
-        if (error) {
+        /*
+         * ============================================================
+         * STEP 3
+         * Generate the problem.
+         * ============================================================
+         *
+         * The Edge Function:
+         *
+         * Gemini
+         *    ↓
+         * Generate problem
+         *    ↓
+         * Save problem in Supabase
+         *    ↓
+         * Return the saved problem
+         *
+         * IMPORTANT:
+         *
+         * data.problem.id is the REAL database UUID.
+         */
+
+        const {
+            data,
+            error: functionError
+        } = await supabase.functions.invoke(
+            "generate-problem",
+            {
+                body: requirements,
+
+                headers: {
+                    Authorization:
+                        `Bearer ${session.access_token}`
+                }
+            }
+        );
+
+
+        /*
+         * ============================================================
+         * STEP 4
+         * Check problem-generation error.
+         * ============================================================
+         */
+
+        if (functionError) {
 
             console.error(
                 "Problem generation error:",
-                error
+                functionError
             );
 
             setError(
+                functionError.message ||
                 "Unable to generate problem. Please try again."
             );
 
@@ -60,10 +156,25 @@ function GeneratePractice() {
             return;
         }
 
+
         console.log(
             "Generated problem received:",
             data
         );
+
+
+        console.log(
+            "Generated hints:",
+            data?.problem?.hints
+        );
+
+
+        /*
+         * ============================================================
+         * STEP 5
+         * Validate generated problem.
+         * ============================================================
+         */
 
         if (!data?.success || !data?.problem) {
 
@@ -76,9 +187,228 @@ function GeneratePractice() {
             return;
         }
 
+
+        /*
+         * ============================================================
+         * STEP 6
+         * Get the REAL problem ID.
+         * ============================================================
+         *
+         * This is the most important part of Step 29.
+         *
+         * We DO NOT use a hardcoded problem ID.
+         *
+         * Every generated problem receives its own UUID.
+         */
+
+        const problemId = data.problem.id;
+
+
+        if (!problemId) {
+
+            console.error(
+                "Generated problem does not contain an ID:",
+                data.problem
+            );
+
+            setError(
+                "Problem was generated, but its database ID is missing."
+            );
+
+            setLoading(false);
+            return;
+        }
+
+
+        console.log(
+            "New generated problem ID:",
+            problemId
+        );
+
+
+        /*
+         * Display the generated problem immediately.
+         */
+
         setGeneratedProblem(data.problem);
+
+
+        /*
+         * ============================================================
+         * STEP 29
+         * Generate 55 hidden test cases for THIS problem.
+         * ============================================================
+         *
+         * The important relationship is:
+         *
+         * generatedProblem.id
+         *          ↓
+         *      problemId
+         *          ↓
+         * generate-test-cases
+         *          ↓
+         * Gemini generates tests for THIS problem
+         *          ↓
+         * problem_test_cases
+         *
+         * Therefore:
+         *
+         * Problem A → its own 55 tests
+         * Problem B → its own 55 tests
+         * Problem C → its own 55 tests
+         *
+         * No test cases are shared between problems.
+         */
+
+        setTestCaseStatus(
+            "Generating 55 hidden test cases..."
+        );
+
+
+        console.log(
+            "STEP 29: Generating hidden tests for problem:",
+            problemId
+        );
+
+
+        const {
+            data: testCaseData,
+            error: testCaseError
+        } = await supabase.functions.invoke(
+            "generate-test-cases",
+            {
+                body: {
+                    problemId: problemId
+                },
+
+                headers: {
+                    Authorization:
+                        `Bearer ${session.access_token}`
+                }
+            }
+        );
+
+
+        /*
+         * ============================================================
+         * STEP 29A
+         * Check test-case generation error.
+         * ============================================================
+         */
+
+        if (testCaseError) {
+
+            console.error(
+                "Test case generation error:",
+                testCaseError
+            );
+
+
+            /*
+             * The problem itself was successfully generated.
+             *
+             * But its hidden tests failed to generate.
+             *
+             * We therefore DO NOT pretend that the problem
+             * is ready for execution.
+             */
+
+            setTestCaseStatus(
+                "Problem created, but hidden test generation failed."
+            );
+
+
+            setError(
+                "Problem was generated successfully, but its hidden test cases could not be created. Please try again."
+            );
+
+
+            setLoading(false);
+            return;
+        }
+
+
+        console.log(
+            "Test case generation response:",
+            testCaseData
+        );
+
+
+        /*
+         * ============================================================
+         * STEP 29B
+         * Validate test-case generation response.
+         * ============================================================
+         */
+
+        if (
+            !testCaseData?.success ||
+            !testCaseData?.testCount
+        ) {
+
+            console.error(
+                "Invalid test-case generation response:",
+                testCaseData
+            );
+
+
+            setTestCaseStatus(
+                "Hidden test generation failed."
+            );
+
+
+            setError(
+                testCaseData?.error ||
+                "Problem was generated, but hidden test cases were not created."
+            );
+
+
+            setLoading(false);
+            return;
+        }
+
+
+        /*
+         * ============================================================
+         * STEP 29C
+         * Success!
+         * ============================================================
+         */
+
+        console.log(
+            "Hidden test cases generated successfully."
+        );
+
+
+        console.log(
+            "Problem ID:",
+            problemId
+        );
+
+
+        console.log(
+            "Test count:",
+            testCaseData.testCount
+        );
+
+
+        setTestCaseCount(
+            testCaseData.testCount
+        );
+
+
+        setTestCaseStatus(
+            `✓ ${testCaseData.testCount} hidden test cases ready`
+        );
+
+
+        /*
+         * The entire generation process is now complete.
+         */
+
         setLoading(false);
     }
+
 
     return (
         <section className="generate-workspace">
@@ -124,6 +454,7 @@ function GeneratePractice() {
                                 setTopic(event.target.value)
                             }
                         >
+
                             <option value="">
                                 Select Topic
                             </option>
@@ -435,6 +766,51 @@ function GeneratePractice() {
 
                 </div>
 
+
+                {/* STEP 29 STATUS */}
+
+                {testCaseStatus && (
+
+                    <div
+                        className="generator-info"
+                        style={{
+                            marginTop: "20px"
+                        }}
+                    >
+
+                        <div className="info-icon">
+                            🧪
+                        </div>
+
+                        <div>
+
+                            <h4>
+                                Hidden Tests
+                            </h4>
+
+                            <p>
+                                {testCaseStatus}
+                            </p>
+
+                            {testCaseCount > 0 && (
+
+                                <p
+                                    style={{
+                                        marginTop: "8px"
+                                    }}
+                                >
+                                    🔒 These tests remain hidden
+                                    from the student.
+                                </p>
+
+                            )}
+
+                        </div>
+
+                    </div>
+
+                )}
+
             </aside>
 
 
@@ -477,8 +853,8 @@ function GeneratePractice() {
                         </h2>
 
                         <p>
-                            CodeMedic AI is preparing a
-                            problem based on your requirements.
+                            CodeMedic is preparing your problem
+                            and its hidden test cases.
                         </p>
 
                     </div>
@@ -669,10 +1045,13 @@ function GeneratePractice() {
 
 
                                             <p className="example-explanation">
+
                                                 <strong>
                                                     Explanation:
                                                 </strong>{" "}
+
                                                 {example.explanation}
+
                                             </p>
 
                                         </div>
@@ -696,15 +1075,30 @@ function GeneratePractice() {
                                 </h3>
 
                                 <p>
-                                    Try solving this problem
-                                    yourself before asking CodeMedic
-                                    for help.
+                                    {testCaseCount > 0
+                                        ? `Your problem is ready with ${testCaseCount} hidden test cases.`
+                                        : "Try solving this problem yourself before asking CodeMedic for help."
+                                    }
                                 </p>
 
                             </div>
 
-                            <button>
-                                Start Coding →
+
+                            <button
+                                onClick={() =>
+                                    onStartCoding(generatedProblem)
+                                }
+                                disabled={testCaseCount === 0}
+                                title={
+                                    testCaseCount === 0
+                                        ? "Hidden test cases are still being prepared."
+                                        : "Start coding"
+                                }
+                            >
+                                {testCaseCount > 0
+                                    ? "Start Coding →"
+                                    : "Preparing Tests..."
+                                }
                             </button>
 
                         </div>

@@ -36,6 +36,7 @@ export default {
           code,
           language,
           basicAnalysis,
+          executionResult,
         } = body;
 
         // Validate required information
@@ -61,7 +62,7 @@ and compare that thinking with their actual implementation.
 IMPORTANT RULES:
 
 1. Analyze the student's actual code.
-2. Compare the student's planned thinking with the implementation.
+2. Compare the student's planned thinking with the implementation. Highlight mismatches (e.g. planned Hash Map O(n) but wrote nested loops O(n²)).
 3. Identify the data structures actually used.
 4. Identify the algorithmic patterns actually used.
 5. Estimate time complexity.
@@ -69,10 +70,13 @@ IMPORTANT RULES:
 7. Detect brute-force approaches when appropriate.
 8. Identify the student's main weakness.
 9. Explain the mistake in beginner-friendly language.
-10. Do not immediately give the complete solution.
-11. Provide progressive hints.
-12. Do not claim correctness with certainty when execution results are unavailable.
-13. Do not invent information.
+10. Do not immediately give the complete solution in the hints or explanation.
+11. Provide exactly 3 progressive hints in the hints array:
+    Hint 1: General direction
+    Hint 2: More specific guidance
+    Hint 3: Strong implementation guidance
+12. Respect the actual execution result (Accepted, Wrong Answer, Compilation Error, Runtime Error, etc.).
+13. Provide a complete, optimal C++ reference solution in the reference_solution field.
 14. Return ONLY valid JSON.
 
 PROBLEM:
@@ -90,6 +94,9 @@ ${language}
 
 Code:
 ${code}
+
+EXECUTION RESULT:
+${JSON.stringify(executionResult || { status: "Not available" }, null, 2)}
 
 BASIC ANALYZER:
 
@@ -187,6 +194,10 @@ Analyze the student and return the requested JSON structure.
                         type: "STRING",
                       },
                     },
+
+                    reference_solution: {
+                      type: "STRING",
+                    },
                   },
 
                   required: [
@@ -202,6 +213,7 @@ Analyze the student and return the requested JSON structure.
                     "explanation",
                     "optimization",
                     "hints",
+                    "reference_solution",
                   ],
                 },
               },

@@ -204,6 +204,25 @@ function Sidebar({
                         </span>
                     </button>
 
+                    <button
+                        className={
+                            page === "Revision"
+                                ? "active"
+                                : ""
+                        }
+                        onClick={() =>
+                            navigate("Revision")
+                        }
+                    >
+                        <span className="nav-icon">
+                            ✦
+                        </span>
+
+                        <span>
+                            Revision
+                        </span>
+                    </button>
+
 
                     <div className="nav-section-title">
                         ACCOUNT

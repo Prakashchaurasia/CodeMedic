@@ -2,11 +2,14 @@ import { useEffect, useState } from "react";
 
 import { supabase } from "../lib/supabase";
 import { getDashboardData } from "../services/dashboardService";
+import { calculateDSAHealth } from "../services/dsaHealthService";
 
-
-function Dashboard({ userName, setPage }) {
+function Dashboard({ userName, setPage, onOpenProblem }) {
 
     const [dashboardData, setDashboardData] =
+        useState(null);
+
+    const [dsaHealth, setDsaHealth] =
         useState(null);
 
     const [loading, setLoading] =
@@ -50,14 +53,13 @@ function Dashboard({ userName, setPage }) {
                     user.id
                 );
 
-
-            console.log(
-                "Dashboard data:",
-                data
-            );
-
+            const health =
+                await calculateDSAHealth(
+                    user.id
+                );
 
             setDashboardData(data);
+            setDsaHealth(health);
 
         } catch (error) {
 
@@ -1195,6 +1197,12 @@ function Dashboard({ userName, setPage }) {
                                         key={
                                             problem.id
                                         }
+                                        style={{ cursor: "pointer" }}
+                                        onClick={() =>
+                                            onOpenProblem
+                                                ? onOpenProblem(problem)
+                                                : setPage("Practice Problem")
+                                        }
                                     >
 
                                         <div
@@ -1405,109 +1413,29 @@ function Dashboard({ userName, setPage }) {
 
 
                 <div className="health-cards">
+                    {(dsaHealth?.topicScores || []).slice(0, 3).map((item, idx) => (
+                        <div
+                            key={idx}
+                            className={`health-card ${item.status === "Needs Practice" ? "weak" : ""}`}
+                            style={{ cursor: "pointer" }}
+                            onClick={() => setPage("DSA Health")}
+                        >
+                            <div className="health-card-top">
+                                <span>{item.topic}</span>
+                                <strong>{item.status}</strong>
+                            </div>
 
+                            <div className="health-progress">
+                                <div
+                                    style={{
+                                        width: `${item.score}%`
+                                    }}
+                                ></div>
+                            </div>
 
-                    <div className="health-card">
-
-                        <div className="health-card-top">
-
-                            <span>
-                                Arrays
-                            </span>
-
-
-                            <strong>
-                                Good
-                            </strong>
-
+                            <small>{item.score}% health</small>
                         </div>
-
-
-                        <div className="health-progress">
-
-                            <div
-                                style={{
-                                    width: "82%"
-                                }}
-                            ></div>
-
-                        </div>
-
-
-                        <small>
-                            82% health
-                        </small>
-
-                    </div>
-
-
-                    <div className="health-card">
-
-                        <div className="health-card-top">
-
-                            <span>
-                                Linked List
-                            </span>
-
-
-                            <strong>
-                                Good
-                            </strong>
-
-                        </div>
-
-
-                        <div className="health-progress">
-
-                            <div
-                                style={{
-                                    width: "70%"
-                                }}
-                            ></div>
-
-                        </div>
-
-
-                        <small>
-                            70% health
-                        </small>
-
-                    </div>
-
-
-                    <div className="health-card weak">
-
-                        <div className="health-card-top">
-
-                            <span>
-                                Recursion
-                            </span>
-
-
-                            <strong>
-                                Needs Practice
-                            </strong>
-
-                        </div>
-
-
-                        <div className="health-progress">
-
-                            <div
-                                style={{
-                                    width: "38%"
-                                }}
-                            ></div>
-
-                        </div>
-
-
-                        <small>
-                            38% health
-                        </small>
-
-                    </div>
-
+                    ))}
                 </div>
 
             </div>

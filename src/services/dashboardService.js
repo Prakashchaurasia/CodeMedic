@@ -46,377 +46,183 @@ async function getUserAttempts(userId) {
     even if the student submitted it multiple times.
 */
 function calculateSolvedProblems(attempts) {
-
     const solvedProblemIds = new Set();
-
     attempts.forEach((attempt) => {
-
-        if (
-            attempt.status?.toLowerCase() ===
-            "solved"
-        ) {
-            solvedProblemIds.add(
-                attempt.problem_id
-            );
+        const s = (attempt.status || "").toLowerCase().trim();
+        if (s === "accepted" || s === "solved") {
+            solvedProblemIds.add(attempt.problem_id);
         }
-
     });
-
     return solvedProblemIds.size;
 }
-
 
 /*
     Number of unique problems attempted.
 */
 function calculateAttemptedProblems(attempts) {
-
     const attemptedProblemIds = new Set();
-
     attempts.forEach((attempt) => {
-
-        attemptedProblemIds.add(
-            attempt.problem_id
-        );
-
+        attemptedProblemIds.add(attempt.problem_id);
     });
-
     return attemptedProblemIds.size;
 }
 
-
 /*
     Get today's activity count.
-
     Every problem practice counts as one activity.
 */
 function calculateTodayActivity(attempts) {
-
-    const today =
-        new Date().toLocaleDateString(
-            "en-CA"
-        );
-
+    const today = new Date().toLocaleDateString("en-CA");
     return attempts.filter((attempt) => {
-
-        const attemptDate =
-            new Date(
-                attempt.created_at
-            ).toLocaleDateString(
-                "en-CA"
-            );
-
+        const attemptDate = new Date(attempt.created_at).toLocaleDateString("en-CA");
         return attemptDate === today;
-
     }).length;
 }
-
 
 /*
     Get activity count for the last 7 calendar days.
 */
 function calculateWeeklyActivity(attempts) {
-
     const activity = {};
-
     const today = new Date();
 
     for (let i = 6; i >= 0; i--) {
-
         const date = new Date(today);
-
-        date.setDate(
-            today.getDate() - i
-        );
-
-        const dateKey =
-            date.toLocaleDateString(
-                "en-CA"
-            );
-
+        date.setDate(today.getDate() - i);
+        const dateKey = date.toLocaleDateString("en-CA");
         activity[dateKey] = 0;
     }
 
-
     attempts.forEach((attempt) => {
-
-        const dateKey =
-            new Date(
-                attempt.created_at
-            ).toLocaleDateString(
-                "en-CA"
-            );
-
-        if (
-            Object.prototype.hasOwnProperty.call(
-                activity,
-                dateKey
-            )
-        ) {
+        const dateKey = new Date(attempt.created_at).toLocaleDateString("en-CA");
+        if (Object.prototype.hasOwnProperty.call(activity, dateKey)) {
             activity[dateKey]++;
         }
-
     });
-
 
     return activity;
 }
 
-
 /*
     Calculate current streak.
-
-    IMPORTANT:
-
-    Multiple problems on the same day
-    count as ONE streak day.
+    IMPORTANT: Only successful Accepted (or solved) submissions qualify a day as active.
+    Multiple Accepted problems on the same day count as ONE streak day.
 */
 function calculateCurrentStreak(attempts) {
-
-    if (attempts.length === 0) {
+    if (!attempts || attempts.length === 0) {
         return 0;
     }
 
-
     const activeDates = new Set();
-
     attempts.forEach((attempt) => {
-
-        const dateKey =
-            new Date(
-                attempt.created_at
-            ).toLocaleDateString(
-                "en-CA"
-            );
-
-        activeDates.add(dateKey);
-
+        const s = (attempt.status || "").toLowerCase().trim();
+        // Only Accepted / solved submissions contribute to the solving streak
+        if (s === "accepted" || s === "solved") {
+            const dateKey = new Date(attempt.created_at).toLocaleDateString("en-CA");
+            activeDates.add(dateKey);
+        }
     });
 
+    if (activeDates.size === 0) {
+        return 0;
+    }
 
     let streak = 0;
-
     const today = new Date();
-
-    today.setHours(
-        0,
-        0,
-        0,
-        0
-    );
-
-
-    const todayKey =
-        today.toLocaleDateString(
-            "en-CA"
-        );
-
-
-    /*
-        If there is no activity today,
-        check whether yesterday was active.
-
-        This allows the existing streak
-        to remain valid during the current day.
-    */
+    today.setHours(0, 0, 0, 0);
+    const todayKey = today.toLocaleDateString("en-CA");
 
     let checkDate = new Date(today);
-
-
     if (!activeDates.has(todayKey)) {
-
-        checkDate.setDate(
-            checkDate.getDate() - 1
-        );
-
-        const yesterdayKey =
-            checkDate.toLocaleDateString(
-                "en-CA"
-            );
-
-        if (
-            !activeDates.has(
-                yesterdayKey
-            )
-        ) {
+        checkDate.setDate(checkDate.getDate() - 1);
+        const yesterdayKey = checkDate.toLocaleDateString("en-CA");
+        if (!activeDates.has(yesterdayKey)) {
             return 0;
         }
-
     }
-
 
     while (true) {
-
-        const dateKey =
-            checkDate.toLocaleDateString(
-                "en-CA"
-            );
-
-        if (
-            !activeDates.has(
-                dateKey
-            )
-        ) {
+        const dateKey = checkDate.toLocaleDateString("en-CA");
+        if (!activeDates.has(dateKey)) {
             break;
         }
-
         streak++;
-
-        checkDate.setDate(
-            checkDate.getDate() - 1
-        );
-
+        checkDate.setDate(checkDate.getDate() - 1);
     }
-
 
     return streak;
 }
 
-
 /*
     Get recent problems.
+    Strictly returns unique problems that have been successfully solved (Accepted).
+    Most recently Accepted problems appear first.
 */
 function getRecentProblems(attempts) {
-
     const seen = new Set();
-
     const recent = [];
 
     for (const attempt of attempts) {
-
-        if (
-            seen.has(
-                attempt.problem_id
-            )
-        ) {
+        const s = (attempt.status || "").toLowerCase().trim();
+        // Only Accepted / solved attempts qualify as recent solved problems
+        if (s !== "accepted" && s !== "solved") {
             continue;
         }
 
-        seen.add(
-            attempt.problem_id
-        );
+        if (seen.has(attempt.problem_id)) {
+            continue;
+        }
+
+        seen.add(attempt.problem_id);
 
         recent.push({
             id: attempt.problem_id,
-
-            title:
-                attempt.problems?.title ||
-                "Unknown Problem",
-
-            topic:
-                attempt.problems?.topic ||
-                "Unknown",
-
-            difficulty:
-                attempt.problems?.difficulty ||
-                "Unknown",
-
-            status:
-                attempt.status ||
-                "Attempted",
-
-            createdAt:
-                attempt.created_at
+            title: attempt.problems?.title || "Unknown Problem",
+            topic: attempt.problems?.topic || "Unknown",
+            difficulty: attempt.problems?.difficulty || "Unknown",
+            status: "Accepted",
+            createdAt: attempt.created_at
         });
-
 
         if (recent.length === 5) {
             break;
         }
-
     }
-
 
     return recent;
 }
 
-
 /*
     Main Dashboard function.
-
-    This is the function Dashboard.jsx
-    will call.
 */
-export async function getDashboardData(
-    userId
-) {
-
+export async function getDashboardData(userId) {
     if (!userId) {
-        throw new Error(
-            "User ID is required."
-        );
+        throw new Error("User ID is required.");
     }
 
+    const attempts = await getUserAttempts(userId);
 
-    const attempts =
-        await getUserAttempts(
-            userId
-        );
+    const { data: dbProblems, error: probError } = await supabase
+        .from("problems")
+        .select("id, is_generated, generated_by");
 
-
-    const totalProblemsResult =
-        await supabase
-            .from("problems")
-            .select(
-                "id",
-                {
-                    count: "exact",
-                    head: true
-                }
-            );
-
-
-    if (
-        totalProblemsResult.error
-    ) {
-
-        console.error(
-            "Total problems error:",
-            totalProblemsResult.error
-        );
-
-        throw totalProblemsResult.error;
+    if (probError) {
+        console.error("Total problems error:", probError);
+        throw probError;
     }
 
+    // Filter problems accessible to this user
+    const userAccessibleProblems = (dbProblems || []).filter(
+        p => !p.is_generated || p.generated_by === userId
+    );
 
-    const totalProblems =
-        totalProblemsResult.count || 0;
-
-
-    const solvedProblems =
-        calculateSolvedProblems(
-            attempts
-        );
-
-
-    const attemptedProblems =
-        calculateAttemptedProblems(
-            attempts
-        );
-
-
-    const todayActivity =
-        calculateTodayActivity(
-            attempts
-        );
-
-
-    const weeklyActivity =
-        calculateWeeklyActivity(
-            attempts
-        );
-
-
-    const currentStreak =
-        calculateCurrentStreak(
-            attempts
-        );
-
-
-    const recentProblems =
-        getRecentProblems(
-            attempts
-        );
+    const totalProblems = userAccessibleProblems.length;
+    const solvedProblems = calculateSolvedProblems(attempts);
+    const attemptedProblems = calculateAttemptedProblems(attempts);
+    const todayActivity = calculateTodayActivity(attempts);
+    const weeklyActivity = calculateWeeklyActivity(attempts);
+    const currentStreak = calculateCurrentStreak(attempts);
+    const recentProblems = getRecentProblems(attempts);
 
 
     return {

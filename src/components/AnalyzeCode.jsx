@@ -1,40 +1,127 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabase";
 import { analyzeSubmittedCode } from "../services/codeAnalysis";
 import { analyzeWithAI } from "../services/aiAnalysis";
+import { executeStudentSolution, preloadCppExecutor } from "../services/cppExecutor";
+import { generateStarterCode } from "../services/executionHarness";
 
-function AnalyzeCode({ problem }) {
+function AnalyzeCode({ problem, setPage }) {
+    useEffect(() => {
+        preloadCppExecutor();
+    }, []);
     const [code, setCode] = useState("");
     const [language, setLanguage] = useState("C++");
 
+    // Execution state
+    const [isExecuting, setIsExecuting] = useState(false);
+    const [executionResult, setExecutionResult] = useState(null);
+    const [activeTab, setActiveTab] = useState(0);
+    const [problemTestCases, setProblemTestCases] = useState([]);
+
+    // AI Analysis state
     const [analysis, setAnalysis] = useState(null);
-
-    const [hintIndex, setHintIndex] = useState(-1);
-
     const [isAnalyzing, setIsAnalyzing] = useState(false);
 
-    const [showExplanation, setShowExplanation] = useState(false);
+    // Hints that appear before code analysis
+    const [visibleProblemHint, setVisibleProblemHint] = useState(-1);
 
-    const [showOptimization, setShowOptimization] = useState(false);
+    // 8-Level Progressive Help State (Level 0 is basic diagnosis, 1 to 7 are revealed on demand)
+    // 0: Basic Diagnosis
+    // 1: Understand Mistake
+    // 2: Hint 1
+    // 3: Hint 2
+    // 4: Hint 3
+    // 5: Optimized Approach
+    // 6: Detailed Explanation
+    // 7: Full Solution
+    const [helpLevel, setHelpLevel] = useState(0);
 
-    const [selectedDataStructures, setSelectedDataStructures] =
-        useState([]);
-
-    const [selectedPatterns, setSelectedPatterns] =
-        useState([]);
-
-    const [selectedComplexity, setSelectedComplexity] =
-        useState("");
-
-    const [thinkingSubmitted, setThinkingSubmitted] =
-        useState(false);
-
-    const [problemAttemptId, setProblemAttemptId] = useState(null);
-
+    // Thinking state
+    const [selectedDataStructures, setSelectedDataStructures] = useState([]);
+    const [selectedPatterns, setSelectedPatterns] = useState([]);
+    const [selectedComplexity, setSelectedComplexity] = useState("");
+    const [thinkingSubmitted, setThinkingSubmitted] = useState(false);
     const [thinkingError, setThinkingError] = useState("");
-
     const [thinkingSaving, setThinkingSaving] = useState(false);
 
+    // Submission / Attempt state
+    const [problemAttemptId, setProblemAttemptId] = useState(null);
+
+    // Initialize starter code and fetch test cases when problem changes
+    useEffect(() => {
+        if (problem) {
+            const starter = generateStarterCode(problem);
+            setCode(starter);
+            setExecutionResult(null);
+            setAnalysis(null);
+            setHelpLevel(0);
+            setThinkingSubmitted(false);
+            setSelectedDataStructures([]);
+            setSelectedPatterns([]);
+            setSelectedComplexity("");
+            setVisibleProblemHint(-1);
+
+            // Fetch stored test cases if problem has a database UUID
+            const isDbUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(problem.id || "");
+            if (isDbUuid) {
+                supabase
+                    .from("problem_test_cases")
+                    .select("id, input, expected_output, is_hidden")
+                    .eq("problem_id", problem.id)
+                    .then(({ data, error }) => {
+                        if (!error && Array.isArray(data) && data.length > 0) {
+                            setProblemTestCases(data);
+                        } else {
+                            setProblemTestCases([]);
+                        }
+                    })
+                    .catch(() => setProblemTestCases([]));
+            } else {
+                setProblemTestCases([]);
+            }
+        }
+    }, [problem?.id, problem?.title]);
+
+    const problemPatterns =
+        problem?.patterns ||
+        (problem?.pattern ? [problem.pattern] : []);
+
+    const problemDataStructures =
+        problem?.data_structures ||
+        (problem?.dataStructure ? [problem.dataStructure] : []);
+
+    const expectedTime =
+        problem?.expected_time ||
+        problem?.expectedTime ||
+        "";
+
+    const expectedSpace =
+        problem?.expected_space ||
+        problem?.expectedSpace ||
+        "";
+
+    const inputFormat =
+        problem?.input_format ||
+        problem?.inputFormat ||
+        "";
+
+    const outputFormat =
+        problem?.output_format ||
+        problem?.outputFormat ||
+        "";
+
+    const learningObjective =
+        problem?.learning_objective ||
+        problem?.learningObjective ||
+        "";
+
+    const problemHints = Array.isArray(problem?.hints)
+        ? problem.hints
+        : [];
+
+    const examples = Array.isArray(problem?.examples)
+        ? problem.examples
+        : [];
 
     const dataStructures = [
         "Array",
@@ -48,7 +135,6 @@ function AnalyzeCode({ problem }) {
         "Heap",
         "Graph"
     ];
-
 
     const patterns = [
         "Brute Force",
@@ -65,50 +151,25 @@ function AnalyzeCode({ problem }) {
         "DFS"
     ];
 
-
     function toggleDataStructure(item) {
-
         if (selectedDataStructures.includes(item)) {
-
             setSelectedDataStructures(
-                selectedDataStructures.filter(
-                    (structure) => structure !== item
-                )
+                selectedDataStructures.filter((s) => s !== item)
             );
-
         } else {
-
-            setSelectedDataStructures([
-                ...selectedDataStructures,
-                item
-            ]);
-
+            setSelectedDataStructures([...selectedDataStructures, item]);
         }
     }
-
 
     function togglePattern(item) {
-
         if (selectedPatterns.includes(item)) {
-
-            setSelectedPatterns(
-                selectedPatterns.filter(
-                    (pattern) => pattern !== item
-                )
-            );
-
+            setSelectedPatterns(selectedPatterns.filter((p) => p !== item));
         } else {
-
-            setSelectedPatterns([
-                ...selectedPatterns,
-                item
-            ]);
-
+            setSelectedPatterns([...selectedPatterns, item]);
         }
     }
-    
+
     async function submitThinking() {
-         
         setThinkingError("");
 
         if (!problem) {
@@ -117,23 +178,17 @@ function AnalyzeCode({ problem }) {
         }
 
         if (selectedDataStructures.length === 0) {
-            setThinkingError(
-                "Please select at least one data structure."
-            );
+            setThinkingError("Please select at least one data structure.");
             return;
         }
 
         if (selectedPatterns.length === 0) {
-            setThinkingError(
-                "Please select at least one pattern."
-            );
+            setThinkingError("Please select at least one pattern.");
             return;
         }
 
         if (!selectedComplexity) {
-            setThinkingError(
-                "Please select an expected time complexity."
-            );
+            setThinkingError("Please select an expected time complexity.");
             return;
         }
 
@@ -144,111 +199,222 @@ function AnalyzeCode({ problem }) {
             error: userError
         } = await supabase.auth.getUser();
 
-
         if (userError || !user) {
-
-            setThinkingError(
-                "Unable to identify the logged-in user."
-            );
-
+            setThinkingError("Unable to identify the logged-in user.");
             setThinkingSaving(false);
-
             return;
         }
 
+        if (problem.id) {
+            const isDbUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(problem.id);
+            if (isDbUuid) {
+                const { error } = await supabase
+                    .from("thinking_attempts")
+                    .insert({
+                        user_id: user.id,
+                        problem_id: problem.id,
+                        data_structures_selected: selectedDataStructures,
+                        patterns_selected: selectedPatterns,
+                        expected_time: selectedComplexity
+                    });
 
-        const { error } = await supabase
-            .from("thinking_attempts")
-            .insert({
-                user_id: user.id,
-                problem_id: problem.id,
-                data_structures_selected: selectedDataStructures,
-                patterns_selected: selectedPatterns,
-                expected_time: selectedComplexity
-            });
-
+                if (error) {
+                    console.error("Thinking attempt save error:", error);
+                }
+            }
+        }
 
         setThinkingSaving(false);
-
-
-        if (error) {
-
-            console.error(
-                "Thinking attempt save error:",
-                error
-            );
-
-            setThinkingError(
-                "Unable to save your thinking. Please try again."
-            );
-
-            return;
-        }
-
-
         setThinkingSubmitted(true);
     }
 
+    // Execute code locally in browser via Emception WASM and drive complete learning workflow
+    async function handleRunCode() {
+        if (code.trim() === "") {
+            alert("Please write your code first.");
+            return;
+        }
 
+        if (!problem) {
+            alert("Please select a problem first.");
+            return;
+        }
+
+        setIsExecuting(true);
+        setExecutionResult(null);
+
+        try {
+            const result = await executeStudentSolution(code, problem, problemTestCases);
+            console.log("Local execution result:", result);
+            setExecutionResult(result);
+            setActiveTab(0);
+            // Immediately release execution UI state so button returns to ready state
+            setIsExecuting(false);
+
+            // Now drive the complete CodeMedic learning analysis and persistence workflow
+            (async () => {
+                let aiResult = null;
+                try {
+                    // For runnable code (Accepted, Wrong Answer, Runtime Error, TLE), perform code & thinking analysis
+                    if (result.status !== "Compilation Error" && result.status !== "Execution Error") {
+                        setIsAnalyzing(true);
+                        const thinking = {
+                            dataStructures: selectedDataStructures,
+                            patterns: selectedPatterns,
+                            complexity: selectedComplexity
+                        };
+
+                        const basicResult = analyzeSubmittedCode({
+                            code,
+                            language,
+                            problem,
+                            thinking
+                        });
+
+                        aiResult = await analyzeWithAI({
+                            problem,
+                            thinking,
+                            code,
+                            language,
+                            basicAnalysis: basicResult,
+                            executionResult: result
+                        });
+
+                        setAnalysis(aiResult);
+                        setHelpLevel(0);
+                        setIsAnalyzing(false);
+                    } else {
+                        setAnalysis(null);
+                    }
+
+                    // Persist attempt and analysis to Supabase
+                    const {
+                        data: { user },
+                        error: userError
+                    } = await supabase.auth.getUser();
+
+                    if (!userError && user && problem.id) {
+                        const isDbUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(problem.id);
+                        if (isDbUuid) {
+                            const { data: savedAttempt, error: attemptError } = await supabase
+                                .from("problem_attempts")
+                                .insert({
+                                    user_id: user.id,
+                                    problem_id: problem.id,
+                                    language: language || "C++",
+                                    submitted_code: code,
+                                    status: result.status || (result.success ? "Accepted" : "Wrong Answer")
+                                })
+                                .select()
+                                .single();
+
+                            if (attemptError) {
+                                console.error("Problem attempt save error on run:", attemptError);
+                            } else if (savedAttempt) {
+                                setProblemAttemptId(savedAttempt.id);
+
+                                if (aiResult) {
+                                    await supabase
+                                        .from("code_analyses")
+                                        .insert({
+                                            attempt_id: savedAttempt.id,
+                                            correctness: aiResult.correctness || (result.status === "Accepted" ? "Accepted" : "Incorrect"),
+                                            approach: aiResult.approach || "Analysis provided",
+                                            brute_force: aiResult.brute_force || false,
+                                            time_complexity: aiResult.time_complexity || "Unknown",
+                                            space_complexity: aiResult.space_complexity || "Unknown",
+                                            actual_data_structures: aiResult.actual_data_structures || [],
+                                            actual_patterns: aiResult.actual_patterns || [],
+                                            weakness: aiResult.weakness || "None noted",
+                                            explanation: aiResult.explanation || "",
+                                            optimization: aiResult.optimization || ""
+                                        });
+                                }
+                            }
+                        }
+                    }
+                } catch (workflowErr) {
+                    console.error("Workflow post-execution error:", workflowErr);
+                } finally {
+                    setIsAnalyzing(false);
+                }
+            })();
+        } catch (err) {
+            console.error("Execution error:", err);
+            const errResult = {
+                success: false,
+                status: "Execution Error",
+                message: err?.message || "Execution failed",
+                testCases: [],
+                passedTests: 0,
+                totalTests: 0,
+                compilationError: null
+            };
+            setExecutionResult(errResult);
+            setIsExecuting(false);
+
+            (async () => {
+                try {
+                    const { data: { user } } = await supabase.auth.getUser();
+                    if (user && problem.id) {
+                        const isDbUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(problem.id);
+                        if (isDbUuid) {
+                            const { data: savedAttempt } = await supabase.from("problem_attempts").insert({
+                                user_id: user.id,
+                                problem_id: problem.id,
+                                language: language || "C++",
+                                submitted_code: code,
+                                status: "Execution Error"
+                            }).select().single();
+                            if (savedAttempt) {
+                                setProblemAttemptId(savedAttempt.id);
+                            }
+                        }
+                    }
+                } catch (_) {}
+            })();
+        } finally {
+            setIsExecuting(false);
+        }
+    }
+
+    // Submit for Gemini AI diagnosis (strictly reuses existing executionResult)
     async function analyzeCode() {
-            if (code.trim() === "") {
-                alert("Please write your code first.");
-                return;
-            }
+        if (code.trim() === "") {
+            alert("Please write your code first.");
+            return;
+        }
 
-            setIsAnalyzing(true);
+        if (!problem) {
+            alert("Please select a problem first.");
+            return;
+        }
 
+        if (!executionResult) {
+            alert("Please run your code first to obtain execution results before diagnosing.");
+            return;
+        }
+
+        setIsAnalyzing(true);
+
+        try {
             const {
                 data: { user },
                 error: userError
             } = await supabase.auth.getUser();
 
             if (userError || !user) {
-                console.error("User fetch error:", userError);
                 alert("Unable to identify the logged-in user.");
                 setIsAnalyzing(false);
                 return;
             }
 
-            const { data: attempt, error: attemptError } =
-                await supabase
-                    .from("problem_attempts")
-                    .insert({
-                        user_id: user.id,
-                        problem_id: problem.id,
-                        language: language,
-                        submitted_code: code,
-                        status: "submitted"
-                    })
-                    .select()
-                    .single();
-
-            if (attemptError) {
-                console.error(
-                    "Problem attempt save error:",
-                    attemptError
-                );
-
-                alert("Unable to save your code submission.");
-                setIsAnalyzing(false);
-                return;
-            }
-
-            setProblemAttemptId(attempt.id);
-
-            console.log(
-                "Problem attempt saved:",
-                attempt
-            );
-
-            // Student's thinking before coding
             const thinking = {
                 dataStructures: selectedDataStructures,
                 patterns: selectedPatterns,
                 complexity: selectedComplexity
             };
 
-            // First run our basic analyzer
             const basicResult = analyzeSubmittedCode({
                 code,
                 language,
@@ -256,164 +422,191 @@ function AnalyzeCode({ problem }) {
                 thinking
             });
 
-            // Then send everything to Gemini
+            // Call Gemini via Edge function or structured fallback
             const result = await analyzeWithAI({
                 problem,
                 thinking,
                 code,
                 language,
-                basicAnalysis: basicResult
+                basicAnalysis: basicResult,
+                executionResult: executionResult
             });
 
-            console.log(
-                "AI diagnosis received:",
-                result
-            );
-
-
+            console.log("AI diagnosis received:", result);
             setAnalysis(result);
+            setHelpLevel(0); // Reset to Level 0 (Basic diagnosis)
 
-            setHintIndex(-1);
-            setShowExplanation(false);
-            setShowOptimization(false);
+            // Save problem attempt & code analysis in Supabase if valid UUID
+            if (problem.id) {
+                const isDbUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(problem.id);
+                if (isDbUuid) {
+                    let attemptId = problemAttemptId;
 
-            const { error: analysisError } = await supabase
-                .from("code_analyses")
-                .insert({
-                    attempt_id: attempt.id,
-                    correctness: result.correctness,
-                    approach: result.approach,
-                    brute_force: result.brute_force,
-                    time_complexity: result.time_complexity,
-                    space_complexity: result.space_complexity,
-                    actual_data_structures:
-                        result.actual_data_structures,
-                    actual_patterns:
-                        result.actual_patterns,
-                    weakness:
-                        result.weakness,
-                    explanation:
-                        result.explanation,
-                    optimization:
-                        result.optimization
-                });
+                    // If an attempt was not yet saved during run (e.g. race condition), create one now
+                    if (!attemptId) {
+                        const { data: savedAttempt, error: attemptError } = await supabase
+                            .from("problem_attempts")
+                            .insert({
+                                user_id: user.id,
+                                problem_id: problem.id,
+                                language: language || "C++",
+                                submitted_code: code,
+                                status: executionResult?.status || "Attempted"
+                            })
+                            .select()
+                            .single();
 
-            if (analysisError) {
-                console.error(
-                    "Code analysis save error:",
-                    analysisError
-                );
+                        if (!attemptError && savedAttempt) {
+                            attemptId = savedAttempt.id;
+                            setProblemAttemptId(savedAttempt.id);
+                        }
+                    }
+
+                    if (attemptId) {
+                        // Save code analysis in Supabase linked to attempt
+                        const { error: analysisError } = await supabase
+                            .from("code_analyses")
+                            .insert({
+                                attempt_id: attemptId,
+                                correctness: result.correctness || (executionResult?.status === "Accepted" ? "Correct" : "Incorrect"),
+                                approach: result.approach || "Analysis provided",
+                                brute_force: result.brute_force || false,
+                                time_complexity: result.time_complexity || "Unknown",
+                                space_complexity: result.space_complexity || "Unknown",
+                                actual_data_structures: result.actual_data_structures || [],
+                                actual_patterns: result.actual_patterns || [],
+                                weakness: result.weakness || "None noted",
+                                explanation: result.explanation || "",
+                                optimization: result.optimization || ""
+                            });
+
+                        if (analysisError) {
+                            console.error("Code analysis save error:", analysisError);
+                        }
+                    }
+                }
             }
-
+        } catch (error) {
+            console.error("Code analysis failed:", error);
+            alert(error?.message || "Something went wrong while analyzing your code.");
+        } finally {
             setIsAnalyzing(false);
-
-    }
-
-    function showNextHint() {
-
-        if (
-            analysis &&
-            hintIndex < analysis.hints.length - 1
-        ) {
-
-            setHintIndex(hintIndex + 1);
-
         }
     }
 
-
-    function clearCode() {
-
-        setCode("");
-
-        setAnalysis(null);
-
-        setHintIndex(-1);
-
-        setShowExplanation(false);
-
-        setShowOptimization(false);
-
+    function showNextProblemHint() {
+        if (problemHints.length > 0 && visibleProblemHint < problemHints.length - 1) {
+            setVisibleProblemHint(visibleProblemHint + 1);
+        }
     }
 
+    function clearCode() {
+        const starter = generateStarterCode(problem);
+        setCode(starter);
+        setExecutionResult(null);
+        setProblemAttemptId(null);
+        setAnalysis(null);
+        setHelpLevel(0);
+    }
 
-    const lineCount =
-        code === ""
-            ? 0
-            : code.split("\n").length;
+    const lineCount = code === "" ? 0 : code.split("\n").length;
+    const analysisHints = Array.isArray(analysis?.hints) ? analysis.hints : [];
+
+    // Helper to get status color badge
+    function getStatusBadgeStyle(status) {
+        switch (status) {
+            case "Accepted":
+                return { background: "rgba(34, 197, 94, 0.2)", color: "#4ade80", border: "1px solid #22c55e" };
+            case "Wrong Answer":
+                return { background: "rgba(239, 68, 68, 0.2)", color: "#f87171", border: "1px solid #ef4444" };
+            case "Compilation Error":
+                return { background: "rgba(245, 158, 11, 0.2)", color: "#fbbf24", border: "1px solid #f59e0b" };
+            case "Runtime Error":
+                return { background: "rgba(239, 68, 68, 0.2)", color: "#ef4444", border: "1px solid #dc2626" };
+            case "Time Limit Exceeded":
+                return { background: "rgba(249, 115, 22, 0.2)", color: "#fb923c", border: "1px solid #f97316" };
+            case "Memory Limit Exceeded":
+                return { background: "rgba(168, 85, 247, 0.2)", color: "#c084fc", border: "1px solid #a855f7" };
+            case "Execution Error":
+                return { background: "rgba(100, 116, 139, 0.2)", color: "#94a3b8", border: "1px solid #64748b" };
+            default:
+                return { background: "rgba(148, 163, 184, 0.2)", color: "#94a3b8", border: "1px solid #64748b" };
+        }
+    }
+
+    if (!problem) {
+        return (
+            <section className="analyze-page">
+                <div
+                    style={{
+                        textAlign: "center",
+                        padding: "60px 24px",
+                        background: "rgba(30, 41, 59, 0.4)",
+                        borderRadius: "12px",
+                        border: "1px dashed rgba(255, 255, 255, 0.15)",
+                        margin: "40px auto",
+                        maxWidth: "600px"
+                    }}
+                >
+                    <div style={{ fontSize: "48px", marginBottom: "16px" }}>🩺</div>
+                    <h2 style={{ color: "#fff", marginBottom: "8px" }}>No Problem Selected</h2>
+                    <p style={{ color: "#94a3b8", fontSize: "15px", lineHeight: "1.6", marginBottom: "24px" }}>
+                        Select a problem from the Practice Library or generate a customized one to start your thinking diagnosis and C++ coding.
+                    </p>
+                    <button
+                        onClick={() => setPage && setPage("Practice Problem")}
+                        style={{
+                            background: "linear-gradient(135deg, #2563eb, #3b82f6)",
+                            color: "#fff",
+                            padding: "12px 24px",
+                            borderRadius: "8px",
+                            border: "none",
+                            fontWeight: "600",
+                            cursor: "pointer",
+                            fontSize: "15px"
+                        }}
+                    >
+                        Browse Practice Problems →
+                    </button>
+                </div>
+            </section>
+        );
+    }
 
     return (
-
         <section className="analyze-page">
-
-
             {/* =========================
                 HEADER
             ========================= */}
-
             <div className="analyze-header">
-
                 <div>
-
-                    <p className="section-label">
-                        CODE DIAGNOSIS
-                    </p>
-
-                    <h2>
-                        Analyze Your Code
-                    </h2>
-
+                    <p className="section-label">CODE DIAGNOSIS & LEARNING</p>
+                    <h2>Analyze Your Code</h2>
                     <p>
-                        Think first. Code second. CodeMedic
-                        analyzes how you approach problems.
+                        Think first. Code second. CodeMedic analyzes your approach and reveals thinking gaps.
                     </p>
-
                 </div>
-
             </div>
 
-
             {/* =========================
-                BEFORE YOU CODE
+                BEFORE YOU CODE (THINKING PANEL)
             ========================= */}
-
-            <section className="thinking-panel">
-
+            <section className="thinking-panel" style={{ marginBottom: "28px" }}>
                 <div className="thinking-header">
-
                     <div>
-
-                        <p className="section-label">
-                            BEFORE YOU CODE
-                        </p>
-
-                        <h2>
-                            How are you thinking about this problem?
-                        </h2>
-
+                        <p className="section-label">STEP 1: BEFORE YOU CODE</p>
+                        <h2>How are you approaching this problem?</h2>
                         <p>
-                            Select everything you think could be
-                            useful. There can be more than one
-                            correct choice.
+                            Select the data structure, pattern, and complexity you plan to use before writing your solution.
                         </p>
-
                     </div>
-
                 </div>
 
-
                 {/* DATA STRUCTURES */}
-
                 <div className="thinking-section">
-
-                    <h3>
-                        1. Which data structure(s) would you consider?
-                    </h3>
-
+                    <h3>1. Which data structure(s) do you plan to use?</h3>
                     <div className="choice-grid">
-
                         {dataStructures.map((item) => (
-
                             <button
                                 key={item}
                                 className={
@@ -421,33 +614,20 @@ function AnalyzeCode({ problem }) {
                                         ? "choice-button selected"
                                         : "choice-button"
                                 }
-                                onClick={() =>
-                                    toggleDataStructure(item)
-                                }
+                                onClick={() => toggleDataStructure(item)}
                                 disabled={thinkingSubmitted}
                             >
                                 {item}
                             </button>
-
                         ))}
-
                     </div>
-
                 </div>
 
-
                 {/* PATTERNS */}
-
                 <div className="thinking-section">
-
-                    <h3>
-                        2. Which pattern(s) do you recognize?
-                    </h3>
-
+                    <h3>2. Which algorithmic pattern(s) do you recognize?</h3>
                     <div className="choice-grid">
-
                         {patterns.map((item) => (
-
                             <button
                                 key={item}
                                 className={
@@ -455,40 +635,20 @@ function AnalyzeCode({ problem }) {
                                         ? "choice-button selected"
                                         : "choice-button"
                                 }
-                                onClick={() =>
-                                    togglePattern(item)
-                                }
+                                onClick={() => togglePattern(item)}
                                 disabled={thinkingSubmitted}
                             >
                                 {item}
                             </button>
-
                         ))}
-
                     </div>
-
                 </div>
 
-
                 {/* COMPLEXITY */}
-
                 <div className="thinking-section">
-
-                    <h3>
-                        3. What time complexity do you expect?
-                    </h3>
-
+                    <h3>3. What time complexity do you expect?</h3>
                     <div className="choice-grid complexity-grid">
-
-                        {[
-                            "O(1)",
-                            "O(log n)",
-                            "O(n)",
-                            "O(n log n)",
-                            "O(n²)",
-                            "O(2ⁿ)"
-                        ].map((item) => (
-
+                        {["O(1)", "O(log n)", "O(n)", "O(n log n)", "O(n²)", "O(2ⁿ)"].map((item) => (
                             <button
                                 key={item}
                                 className={
@@ -496,51 +656,24 @@ function AnalyzeCode({ problem }) {
                                         ? "choice-button selected"
                                         : "choice-button"
                                 }
-                                onClick={() =>
-                                    setSelectedComplexity(item)
-                                }
+                                onClick={() => setSelectedComplexity(item)}
                                 disabled={thinkingSubmitted}
                             >
                                 {item}
                             </button>
-
                         ))}
-
                     </div>
-
                 </div>
 
-
                 {/* THINKING SUMMARY */}
-
                 <div className="thinking-summary">
-
                     <div className="thinking-summary-info">
-
-                        <span>
-                            Data Structures:{" "}
-                            {selectedDataStructures.length}
-                        </span>
-
-                        <span>
-                            Patterns:{" "}
-                            {selectedPatterns.length}
-                        </span>
-
-                        <span>
-                            Complexity:{" "}
-                            {selectedComplexity || "Not selected"}
-                        </span>
-
+                        <span>Data Structures: {selectedDataStructures.length}</span>
+                        <span>Patterns: {selectedPatterns.length}</span>
+                        <span>Complexity: {selectedComplexity || "Not selected"}</span>
                     </div>
 
-
-                    {thinkingError && (
-                        <p className="auth-error">
-                            {thinkingError}
-                        </p>
-                    )}
-
+                    {thinkingError && <p className="auth-error">{thinkingError}</p>}
 
                     <button
                         className="thinking-submit-button"
@@ -556,554 +689,496 @@ function AnalyzeCode({ problem }) {
                         {thinkingSaving
                             ? "Saving..."
                             : thinkingSubmitted
-                                ? "Thinking Submitted ✓"
-                                : "Lock My Thinking"
-                        }
+                            ? "Thinking Locked ✓"
+                            : "Lock My Thinking"}
                     </button>
-
                 </div>
-
             </section>
 
             {/* =========================
-                CODE EDITOR
+                MAIN CODING LAYOUT
             ========================= */}
-
             <div className="analyze-layout">
-
-
-                {/* PROBLEM */}
-
+                {/* PROBLEM DETAILS PANEL */}
                 <div className="problem-panel">
-
                     <div className="panel-header">
-
-                        <span>
-                            PROBLEM
-                        </span>
-
-                        <span className="difficulty-badge">
-                            {problem?.difficulty || "Easy"}
-                        </span>
-
+                        <span>PROBLEM</span>
+                        <span className="difficulty-badge">{problem?.difficulty || "Easy"}</span>
                     </div>
 
-
-                    <h3>
-                        {problem?.title || "Select a Problem"}
-                    </h3>
-
-
-                    <p>
-                        {problem?.description ||
-                            "Select a problem from the Problems section to begin analysis."
-                        }
+                    <h3>{problem?.title || "Select a Problem"}</h3>
+                    <p className="problem-description">
+                        {problem?.description || "Select a problem from the Practice section to begin."}
                     </p>
 
+                    <div className="problem-topic">{problem?.topic || "DSA"}</div>
 
-                    <div className="problem-topic">
-                        {problem?.topic || "DSA"}
-                    </div>
+                    {/* EXAMPLES */}
+                    {examples.length > 0 && (
+                        <div className="problem-detail-section">
+                            <h4>🧪 Examples</h4>
+                            <div className="problem-examples">
+                                {examples.map((example, index) => (
+                                    <div className="problem-example" key={index}>
+                                        <strong>Example {index + 1}</strong>
+                                        <div className="example-block">
+                                            <span>Input:</span>
+                                            <code>{example.input}</code>
+                                        </div>
+                                        <div className="example-block">
+                                            <span>Output:</span>
+                                            <code>{example.output}</code>
+                                        </div>
+                                        {example.explanation && (
+                                            <div className="example-explanation">
+                                                <span>Explanation:</span>
+                                                <p>{example.explanation}</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
 
+                    {/* CONSTRAINTS */}
+                    {problem?.constraints && (
+                        <div className="problem-detail-section">
+                            <h4>📌 Constraints</h4>
+                            <div className="problem-detail-box">{problem.constraints}</div>
+                        </div>
+                    )}
+
+                    {/* PRE-CODING HINTS */}
+                    {problemHints.length > 0 && (
+                        <div className="problem-detail-section">
+                            <div className="problem-hints-header">
+                                <p className="section-label">NEED A HINT?</p>
+                                <h4>💡 Progressive Hints</h4>
+                                <p>Revealed one at a time to help you think without spoiling the solution.</p>
+                            </div>
+
+                            <div className="problem-hints-list">
+                                {problemHints.slice(0, visibleProblemHint + 1).map((hint, index) => (
+                                    <div className="problem-hint-card" key={index}>
+                                        <div className="problem-hint-number">Hint {index + 1}</div>
+                                        <p>{hint}</p>
+                                    </div>
+                                ))}
+                            </div>
+
+                            {visibleProblemHint < problemHints.length - 1 && (
+                                <button
+                                    type="button"
+                                    className="next-hint-button"
+                                    onClick={showNextProblemHint}
+                                >
+                                    💡 Show Hint {visibleProblemHint + 2}
+                                </button>
+                            )}
+                        </div>
+                    )}
                 </div>
 
-
-                {/* CODE */}
-
+                {/* CODE EDITOR & RUNNER PANEL */}
                 <div className="code-panel">
-
                     <div className="panel-header">
-
-                        <span>
-                            YOUR CODE
-                        </span>
-
-
+                        <span>FUNCTION-ONLY SOLUTION</span>
                         <select
                             className="language-select"
                             value={language}
-                            onChange={(event) =>
-                                setLanguage(event.target.value)
-                            }
+                            onChange={(event) => setLanguage(event.target.value)}
                         >
-
-                            <option value="C++">
-                                C++
-                            </option>
-
-                            <option value="Java">
-                                Java
-                            </option>
-
-                            <option value="Python">
-                                Python
-                            </option>
-
-                            <option value="JavaScript">
-                                JavaScript
-                            </option>
-
+                            <option value="C++">C++ (Browser WASM)</option>
                         </select>
-
                     </div>
-
 
                     <textarea
                         value={code}
-                        onChange={(event) =>
-                            setCode(event.target.value)
-                        }
-                        placeholder={`Write your ${language} solution here...`}
+                        onChange={(event) => {
+                            setCode(event.target.value);
+                            if (executionResult) setExecutionResult(null);
+                            if (problemAttemptId) setProblemAttemptId(null);
+                        }}
+                        placeholder={`class Solution {\npublic:\n    // Write your code here\n};`}
                         spellCheck="false"
+                        style={{ minHeight: "340px", fontFamily: "'Fira Code', monospace", fontSize: "14px" }}
                     />
 
-
                     <div className="code-meta">
-
-                        <span>
-                            Lines: {lineCount}
-                        </span>
-
-                        <span>
-                            Characters: {code.length}
-                        </span>
-
+                        <span>Lines: {lineCount}</span>
+                        <span>Characters: {code.length}</span>
+                        <span>⚡ Zero-server local browser execution</span>
                     </div>
 
-
-                    <div className="code-actions">
-
+                    <div className="code-actions" style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
                         <button
                             className="clear-button"
                             onClick={clearCode}
                             disabled={code.length === 0}
                         >
-                            Clear
+                            Reset
                         </button>
 
+                        <button
+                            className="run-button"
+                            style={{
+                                background: "#059669",
+                                color: "#fff",
+                                padding: "10px 20px",
+                                borderRadius: "8px",
+                                border: "none",
+                                fontWeight: "600",
+                                cursor: (code.trim() === "" || isExecuting) ? "not-allowed" : "pointer"
+                            }}
+                            onClick={handleRunCode}
+                            disabled={code.trim() === "" || isExecuting}
+                        >
+                            {isExecuting ? "Compiling & Running..." : "▶ Run Code"}
+                        </button>
 
                         <button
                             className="analyze-button"
                             onClick={analyzeCode}
-                            disabled={
-                                code.trim() === "" ||
-                                isAnalyzing ||
-                                !thinkingSubmitted
-                            }
+                            disabled={code.trim() === "" || isAnalyzing || isExecuting || !executionResult}
+                            title={!executionResult ? "Run your code first to verify results before diagnosing" : "Diagnose with AI"}
+                            style={{
+                                opacity: (!executionResult || isExecuting || isAnalyzing) ? 0.6 : 1,
+                                cursor: (!executionResult || isExecuting || isAnalyzing) ? "not-allowed" : "pointer"
+                            }}
                         >
-
-                            {isAnalyzing
-                                ? "Analyzing..."
-                                : "Analyze Code"
-                            }
-
+                            {isAnalyzing ? "Diagnosing with AI..." : "🩺 Diagnose with AI"}
                         </button>
-
                     </div>
 
-                </div>
+                    {/* =========================
+                        EXECUTION RESULTS PANEL
+                    ========================= */}
+                    {executionResult && (
+                        <div
+                            className="execution-panel"
+                            style={{
+                                marginTop: "20px",
+                                background: "rgba(15, 23, 42, 0.8)",
+                                border: "1px solid rgba(255, 255, 255, 0.1)",
+                                borderRadius: "8px",
+                                padding: "18px"
+                            }}
+                        >
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                                    <span
+                                        style={{
+                                            padding: "6px 12px",
+                                            borderRadius: "6px",
+                                            fontWeight: "700",
+                                            fontSize: "13px",
+                                            ...getStatusBadgeStyle(executionResult.status)
+                                        }}
+                                    >
+                                        {executionResult.status}
+                                    </span>
+                                    <span style={{ color: "#cbd5e1", fontSize: "14px" }}>
+                                        {executionResult.message}
+                                    </span>
+                                </div>
+                                {executionResult.executionTimeMs > 0 && (
+                                    <span style={{ fontSize: "12px", color: "#94a3b8" }}>
+                                        ⏱ {executionResult.executionTimeMs.toFixed(1)} ms
+                                    </span>
+                                )}
+                            </div>
 
+                            {/* Compilation error box */}
+                            {executionResult.compilationError && (
+                                <pre
+                                    style={{
+                                        background: "rgba(239, 68, 68, 0.1)",
+                                        border: "1px solid #ef4444",
+                                        borderRadius: "6px",
+                                        padding: "12px",
+                                        color: "#fca5a5",
+                                        fontSize: "13px",
+                                        fontFamily: "monospace",
+                                        whiteSpace: "pre-wrap"
+                                    }}
+                                >
+                                    {executionResult.compilationError}
+                                </pre>
+                            )}
+
+                            {/* Test Cases Tabs */}
+                            {executionResult.testCases && executionResult.testCases.length > 0 && (
+                                <div>
+                                    <div style={{ display: "flex", gap: "8px", borderBottom: "1px solid rgba(255, 255, 255, 0.1)", paddingBottom: "8px", marginBottom: "12px" }}>
+                                        {executionResult.testCases.map((tc, idx) => (
+                                            <button
+                                                key={idx}
+                                                onClick={() => setActiveTab(idx)}
+                                                style={{
+                                                    background: activeTab === idx ? "rgba(59, 130, 246, 0.3)" : "transparent",
+                                                    color: activeTab === idx ? "#60a5fa" : "#94a3b8",
+                                                    border: activeTab === idx ? "1px solid #3b82f6" : "1px solid transparent",
+                                                    borderRadius: "6px",
+                                                    padding: "6px 12px",
+                                                    fontSize: "13px",
+                                                    cursor: "pointer",
+                                                    display: "flex",
+                                                    alignItems: "center",
+                                                    gap: "6px"
+                                                }}
+                                            >
+                                                <span>Case {idx + 1}</span>
+                                                <span>{tc.passed ? "✓" : "✗"}</span>
+                                            </button>
+                                        ))}
+                                    </div>
+
+                                    {executionResult.testCases[activeTab] && (
+                                        <div style={{ fontSize: "13px", display: "flex", flexDirection: "column", gap: "8px" }}>
+                                            <div>
+                                                <strong style={{ color: "#94a3b8" }}>Input:</strong>
+                                                <div style={{ background: "rgba(30, 41, 59, 0.6)", padding: "8px", borderRadius: "4px", fontFamily: "monospace", color: "#f8fafc", marginTop: "2px" }}>
+                                                    {executionResult.testCases[activeTab].input}
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <strong style={{ color: "#94a3b8" }}>Expected:</strong>
+                                                <div style={{ background: "rgba(30, 41, 59, 0.6)", padding: "8px", borderRadius: "4px", fontFamily: "monospace", color: "#4ade80", marginTop: "2px" }}>
+                                                    {executionResult.testCases[activeTab].expected}
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <strong style={{ color: "#94a3b8" }}>Your Output:</strong>
+                                                <div style={{
+                                                    background: "rgba(30, 41, 59, 0.6)",
+                                                    padding: "8px",
+                                                    borderRadius: "4px",
+                                                    fontFamily: "monospace",
+                                                    color: executionResult.testCases[activeTab].passed ? "#4ade80" : "#f87171",
+                                                    marginTop: "2px"
+                                                }}>
+                                                    {executionResult.testCases[activeTab].actual}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
             </div>
 
-
             {/* =========================
-                DIAGNOSIS RESULT
+                DIAGNOSIS & PROGRESSIVE HELP
             ========================= */}
-
             {analysis && (
-
-                <section className="analysis-result">
-
-
+                <section className="analysis-result" style={{ marginTop: "36px" }}>
                     <div className="analysis-result-header">
-
                         <div>
-
-                            <p className="section-label">
-                                DIAGNOSIS RESULT
-                            </p>
-
-                            <h2>
-                                Here's what CodeMedic found
-                            </h2>
-
+                            <p className="section-label">STEP 2: THINKING DIAGNOSIS</p>
+                            <h2>CodeMedic Educational Diagnosis</h2>
                             <p className="diagnosis-subtitle">
-                                We found some observations about
-                                your current approach.
+                                Comparing what you planned before coding vs. what you actually implemented.
                             </p>
-
                         </div>
-
                     </div>
 
-
-                    {/* BASIC DIAGNOSIS */}
-
+                    {/* BASIC DIAGNOSIS METRICS */}
                     <div className="analysis-grid">
-
                         <div className="analysis-card">
-
-                            <span>
-                                Correctness
-                            </span>
-
-                            <h3>
-                                {analysis.correctness}
-                            </h3>
-
+                            <span>Execution Status</span>
+                            <h3>{executionResult?.status || analysis.correctness}</h3>
                         </div>
 
-
                         <div className="analysis-card">
-
-                            <span>
-                                Your Approach
-                            </span>
-
-                            <h3>
-                                {analysis.approach}
-                            </h3>
-
+                            <span>Detected Approach</span>
+                            <h3>{analysis.approach}</h3>
                         </div>
 
-
                         <div className="analysis-card">
-
-                            <span>
-                                Brute Force
-                            </span>
-
-                            <h3>
-                                {analysis.brute_force ? "Yes" : "No"}
-                            </h3>
-
+                            <span>Brute Force</span>
+                            <h3>{analysis.brute_force ? "Yes" : "No"}</h3>
                         </div>
 
-
                         <div className="analysis-card">
-
-                            <span>
-                                Your Time Complexity
-                            </span>
-
-                            <h3>
-                                {analysis.time_complexity}
-                            </h3>
-
+                            <span>Time Complexity</span>
+                            <h3>{analysis.time_complexity}</h3>
                         </div>
 
-
                         <div className="analysis-card">
-
-                            <span>
-                                Your Space Complexity
-                            </span>
-
-                            <h3>
-                                {analysis.space_complexity}
-                            </h3>
-
+                            <span>Space Complexity</span>
+                            <h3>{analysis.space_complexity}</h3>
                         </div>
-
                     </div>
 
+                    {/* =========================
+                        THINKING VS IMPLEMENTATION COMPARISON
+                    ========================= */}
+                    <div className="thinking-comparison" style={{ margin: "28px 0" }}>
+                        <div className="comparison-column">
+                            <p className="comparison-label">YOUR PLANNED THINKING</p>
+                            <h3>Before Coding</h3>
+                            <div className="comparison-item">
+                                <span>Data Structures</span>
+                                <strong>{selectedDataStructures.join(" + ") || "None"}</strong>
+                            </div>
+                            <div className="comparison-item">
+                                <span>Patterns</span>
+                                <strong>{selectedPatterns.join(" + ") || "None"}</strong>
+                            </div>
+                            <div className="comparison-item">
+                                <span>Expected Complexity</span>
+                                <strong>{selectedComplexity || "Not selected"}</strong>
+                            </div>
+                        </div>
+
+                        <div className="comparison-divider">VS</div>
+
+                        <div className="comparison-column">
+                            <p className="comparison-label">ACTUAL IMPLEMENTATION</p>
+                            <h3>What You Wrote</h3>
+                            <div className="comparison-item">
+                                <span>Data Structures</span>
+                                <strong>{analysis.actual_data_structures?.join(" + ") || "Not detected"}</strong>
+                            </div>
+                            <div className="comparison-item">
+                                <span>Pattern</span>
+                                <strong>{analysis.actual_patterns?.join(" + ") || "Not detected"}</strong>
+                            </div>
+                            <div className="comparison-item">
+                                <span>Actual Complexity</span>
+                                <strong>{analysis.time_complexity || "Unknown"}</strong>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* THINKING OBSERVATION / MISMATCH ALERT */}
+                    {analysis.thinking_observation && (
+                        <div
+                            className="thinking-observation"
+                            style={{
+                                background: "rgba(59, 130, 246, 0.1)",
+                                borderLeft: "4px solid #3b82f6",
+                                padding: "18px",
+                                borderRadius: "0 8px 8px 0",
+                                margin: "20px 0"
+                            }}
+                        >
+                            <p className="comparison-label" style={{ color: "#60a5fa", fontWeight: "700" }}>
+                                💡 THINKING OBSERVATION & GAP ANALYSIS
+                            </p>
+                            <p style={{ margin: 0, fontSize: "15px", color: "#e2e8f0", lineHeight: "1.6" }}>
+                                {analysis.thinking_observation}
+                            </p>
+                        </div>
+                    )}
 
                     {/* =========================
-                        THINKING COMPARISON
+                        8-LEVEL PROGRESSIVE HELP SYSTEM
                     ========================= */}
-
-                    <div className="thinking-comparison">
-
-                            {/* STUDENT THINKING */}
-
-                            <div className="comparison-column">
-
-                                <p className="comparison-label">
-                                    YOUR THINKING
+                    <div style={{ marginTop: "32px", borderTop: "1px solid rgba(255, 255, 255, 0.1)", paddingTop: "24px" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+                            <div>
+                                <p className="section-label">STEP 3: PROGRESSIVE ASSISTANCE</p>
+                                <h3>Guided Help System (Level {helpLevel}/7)</h3>
+                                <p style={{ color: "#94a3b8", fontSize: "14px", margin: "4px 0 0 0" }}>
+                                    Control how much help you unlock. Learn progressively without spoiling the full solution.
                                 </p>
-
-                                <h3>
-                                    Before Coding
-                                </h3>
-
-
-                                <div className="comparison-item">
-
-                                    <span>
-                                        Data Structures
-                                    </span>
-
-                                    <strong>
-                                        {selectedDataStructures.join(" + ")}
-                                    </strong>
-
-                                </div>
-
-
-                                <div className="comparison-item">
-
-                                    <span>
-                                        Patterns
-                                    </span>
-
-                                    <strong>
-                                        {selectedPatterns.join(" + ")}
-                                    </strong>
-
-                                </div>
-
-
-                                <div className="comparison-item">
-
-                                    <span>
-                                        Expected Time
-                                    </span>
-
-                                    <strong>
-                                        {selectedComplexity}
-                                    </strong>
-
-                                </div>
-
                             </div>
 
-
-                            {/* VS */}
-
-                            <div className="comparison-divider">
-                                VS
-                            </div>
-
-
-                            {/* ACTUAL IMPLEMENTATION */}
-
-                            <div className="comparison-column">
-
-                                <p className="comparison-label">
-                                    YOUR IMPLEMENTATION
-                                </p>
-
-                                <h3>
-                                    What CodeMedic Found
-                                </h3>
-
-
-                                <div className="comparison-item">
-
-                                    <span>
-                                        Data Structure
-                                    </span>
-
-                                    <strong>
-                                        {analysis.actual_data_structures?.join(" + ") ||
-                                            "Not detected"}
-                                    </strong>
-
-                                </div>
-
-
-                                <div className="comparison-item">
-
-                                    <span>
-                                        Pattern
-                                    </span>
-
-                                    <strong>
-                                        {analysis.actual_patterns?.join(" + ") ||
-                                            "Not detected"}
-                                    </strong>
-
-                                </div>
-
-
-                                <div className="comparison-item">
-
-                                    <span>
-                                        Time Complexity
-                                    </span>
-
-                                    <strong>
-                                        {analysis.time_complexity || "Unknown"}
-                                    </strong>
-
-                                </div>
-
-                            </div>
-
-                        </div>
-
-
-                        {/* CODEMEDIC OBSERVATION */}
-
-                        <div className="thinking-observation">
-
-                            <p className="comparison-label">
-                                CODEMEDIC OBSERVATION
-                            </p>
-
-                            <p>
-                                {analysis.thinking_observation ||
-                                    "No observation available."}
-                            </p>
-
-                        </div>
-
-
-                        {/* =========================
-                            UNDERSTAND MISTAKE
-                        ========================= */}
-
-                        <div className="help-section">
-
-                            <h3>
-                                Want to understand your approach?
-                            </h3>
-
-                            <p>
-                                CodeMedic won't reveal the solution.
-                                It will help you understand the issue
-                                step by step.
-                            </p>
-
-
-                            {!showExplanation && (
-
+                            {helpLevel < 7 && (
                                 <button
-                                    className="help-button"
-                                    onClick={() =>
-                                        setShowExplanation(true)
-                                    }
+                                    onClick={() => setHelpLevel(helpLevel + 1)}
+                                    style={{
+                                        background: "linear-gradient(135deg, #4f46e5 0%, #3b82f6 100%)",
+                                        color: "#fff",
+                                        border: "none",
+                                        padding: "10px 20px",
+                                        borderRadius: "6px",
+                                        fontWeight: "600",
+                                        cursor: "pointer"
+                                    }}
                                 >
-                                    Understand My Mistake
+                                    Unlock Level {helpLevel + 1} →
                                 </button>
-
                             )}
-
-
-                            {showExplanation && (
-
-                                <div className="revealed-help">
-
-                                    <h4>
-                                        What CodeMedic noticed
-                                    </h4>
-
-                                    <p>
-                                        {analysis.explanation ||
-                                            "No explanation available."}
-                                    </p>
-
-                                </div>
-
-                            )}
-
                         </div>
-                    {/* =========================
-                        PROGRESSIVE HINTS
-                    ========================= */}
 
-                    <div className="help-section hint-section">
-
-                        <h3>
-                            💡 Need a Hint?
-                        </h3>
-
-                        <p>
-                            Hints are revealed one at a time.
-                        </p>
-
-
-                        {hintIndex >= 0 && (
-
-                            <div className="revealed-help">
-
-                                <p>
-                                    {analysis.hints[hintIndex]}
+                        {/* LEVEL 1: UNDERSTAND MISTAKE */}
+                        {helpLevel >= 1 && (
+                            <div className="help-section" style={{ background: "rgba(30, 41, 59, 0.5)", padding: "16px", borderRadius: "8px", margin: "12px 0" }}>
+                                <h4 style={{ color: "#fbbf24", margin: "0 0 8px 0" }}>🔍 Level 1: Understand Your Mistake & Weakness</h4>
+                                <p style={{ color: "#e2e8f0", margin: 0 }}>
+                                    {analysis.weakness || analysis.explanation || "No critical weakness identified."}
                                 </p>
-
                             </div>
-
                         )}
 
-
-                        {hintIndex <
-                            analysis.hints.length - 1 ? (
-
-                            <button
-                                className="hint-button"
-                                onClick={showNextHint}
-                            >
-
-                                {hintIndex === -1
-                                    ? "Get Hint 1"
-                                    : `Get Hint ${hintIndex + 2}`
-                                }
-
-                            </button>
-
-                        ) : (
-
-                            <p className="hint-complete">
-                                You've received all available hints.
-                            </p>
-
+                        {/* LEVEL 2: HINT 1 */}
+                        {helpLevel >= 2 && analysisHints[0] && (
+                            <div className="help-section" style={{ background: "rgba(30, 41, 59, 0.5)", padding: "16px", borderRadius: "8px", margin: "12px 0" }}>
+                                <h4 style={{ color: "#38bdf8", margin: "0 0 8px 0" }}>💡 Level 2: Hint 1 (General Direction)</h4>
+                                <p style={{ color: "#e2e8f0", margin: 0 }}>{analysisHints[0]}</p>
+                            </div>
                         )}
 
-                    </div>
-
-
-                    {/* =========================
-                        OPTIMIZATION
-                    ========================= */}
-
-                    <div className="help-section">
-
-                        <h3>
-                            Want to explore optimization?
-                        </h3>
-
-                        <p>
-                            Try thinking about your approach
-                            before revealing this section.
-                        </p>
-
-
-                        {!showOptimization && (
-
-                            <button
-                                className="help-button"
-                                onClick={() =>
-                                    setShowOptimization(true)
-                                }
-                            >
-                                Show Optimization
-                            </button>
-
+                        {/* LEVEL 3: HINT 2 */}
+                        {helpLevel >= 3 && analysisHints[1] && (
+                            <div className="help-section" style={{ background: "rgba(30, 41, 59, 0.5)", padding: "16px", borderRadius: "8px", margin: "12px 0" }}>
+                                <h4 style={{ color: "#38bdf8", margin: "0 0 8px 0" }}>💡 Level 3: Hint 2 (Algorithmic Guidance)</h4>
+                                <p style={{ color: "#e2e8f0", margin: 0 }}>{analysisHints[1]}</p>
+                            </div>
                         )}
 
+                        {/* LEVEL 4: HINT 3 */}
+                        {helpLevel >= 4 && analysisHints[2] && (
+                            <div className="help-section" style={{ background: "rgba(30, 41, 59, 0.5)", padding: "16px", borderRadius: "8px", margin: "12px 0" }}>
+                                <h4 style={{ color: "#38bdf8", margin: "0 0 8px 0" }}>💡 Level 4: Hint 3 (Implementation Guidance)</h4>
+                                <p style={{ color: "#e2e8f0", margin: 0 }}>{analysisHints[2]}</p>
+                            </div>
+                        )}
 
-                        {showOptimization && (
-
-                            <div className="revealed-help">
-
-                                <h4>
-                                    Optimization Direction
-                                </h4>
-
-                                <p>
-                                    {analysis.optimization}
+                        {/* LEVEL 5: OPTIMIZED APPROACH */}
+                        {helpLevel >= 5 && (
+                            <div className="help-section" style={{ background: "rgba(30, 41, 59, 0.5)", padding: "16px", borderRadius: "8px", margin: "12px 0" }}>
+                                <h4 style={{ color: "#a855f7", margin: "0 0 8px 0" }}>⚡ Level 5: Optimized Approach Direction</h4>
+                                <p style={{ color: "#e2e8f0", margin: 0 }}>
+                                    {analysis.optimization || "Aim for optimal single-pass or logarithmic complexity."}
                                 </p>
-
                             </div>
-
                         )}
 
-                    </div>
+                        {/* LEVEL 6: DETAILED EXPLANATION */}
+                        {helpLevel >= 6 && (
+                            <div className="help-section" style={{ background: "rgba(30, 41, 59, 0.5)", padding: "16px", borderRadius: "8px", margin: "12px 0" }}>
+                                <h4 style={{ color: "#34d399", margin: "0 0 8px 0" }}>📖 Level 6: Detailed Step-by-Step Explanation</h4>
+                                <p style={{ color: "#e2e8f0", margin: 0, whiteSpace: "pre-wrap" }}>
+                                    {analysis.explanation || "Detailed step-by-step reasoning."}
+                                </p>
+                            </div>
+                        )}
 
+                        {/* LEVEL 7: FULL REFERENCE SOLUTION */}
+                        {helpLevel >= 7 && (
+                            <div className="help-section" style={{ background: "rgba(15, 23, 42, 0.9)", border: "1px solid #10b981", padding: "18px", borderRadius: "8px", margin: "12px 0" }}>
+                                <h4 style={{ color: "#4ade80", margin: "0 0 8px 0" }}>🏆 Level 7: Reference C++ Solution</h4>
+                                <pre style={{ color: "#a7f3d0", fontFamily: "'Fira Code', monospace", fontSize: "13px", overflowX: "auto", margin: 0 }}>
+                                    {analysis.reference_solution || `// Reference Solution for ${problem?.title || "Problem"}
+// Time Complexity: ${problem?.expected_time || "Optimal"}
+// Space Complexity: ${problem?.expected_space || "Optimal"}
+
+class Solution {
+public:
+    // Optimal implementation
+};`}
+                                </pre>
+                            </div>
+                        )}
+                    </div>
                 </section>
-
             )}
-
         </section>
     );
 }
