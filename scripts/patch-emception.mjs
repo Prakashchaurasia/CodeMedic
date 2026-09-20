@@ -50,6 +50,16 @@ patchFile(lazyJsPath, [
 const workerEntryJsPath = path.join(rootDir, 'node_modules', '@gameguild', 'emception-browser', 'dist', 'worker-entry.js');
 patchFile(workerEntryJsPath, [
     {
+        name: 'Create /home/user/default directory on boot',
+        from: `    await overlay.mkdir('/home/user');`,
+        to: `    await overlay.mkdir('/home/user');\n    try { await overlay.mkdir('/home/user/default'); } catch (_) {}`
+    },
+    {
+        name: 'Auto-create parent directory on writeFile',
+        from: `                await vfs.overlay.writeFile(msg.path, msg.data);`,
+        to: `                try {\n                    const lastSlash = msg.path.lastIndexOf('/');\n                    if (lastSlash > 0) {\n                        const parentDir = msg.path.slice(0, lastSlash);\n                        try { await vfs.overlay.mkdir(parentDir); } catch (_) {}\n                    }\n                } catch (_) {}\n                await vfs.overlay.writeFile(msg.path, msg.data);`
+    },
+    {
         name: 'Error handling in handleRun to prevent worker hanging',
         from: `    const result = await runner.run(tool, argv, {
         env: options.env,

@@ -162,7 +162,7 @@ export async function runCppCode(code, stdin = "") {
     isExecuting = true;
     const execId = Math.random().toString(36).slice(2, 8);
     const paths = {
-        sourcePath: `solution_${execId}.cpp`,
+        sourcePath: `/home/user/default/solution_${execId}.cpp`,
         objectPath: `solution_${execId}.o`,
         wasmPath: `solution_${execId}.wasm`,
     };
