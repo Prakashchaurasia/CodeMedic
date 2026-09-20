@@ -111,8 +111,14 @@ function AnalyzeCode({ problem, setPage, userId }) {
                     .then(({ data, error }) => {
                         if (!error && Array.isArray(data) && data.length > 0) {
                             setProblemTestCases(data);
+                            console.log(`[CodeMedic Generated Execution]\nproblemId: ${problem.id}\nisGenerated: ${!!problem.is_generated}\ngeneratedBy: ${problem.generated_by || "unknown"}\ntestCaseCount: ${data.length}`);
+                            console.log(`[CodeMedic Generated Execution]\nproblemId = ${problem.id}\nloadedTestCases = ${data.length}`);
                         } else {
                             setProblemTestCases([]);
+                            if (problem.is_generated) {
+                                console.log(`[CodeMedic Generated Execution]\nproblemId: ${problem.id}\nisGenerated: true\ngeneratedBy: ${problem.generated_by || "unknown"}\ntestCaseCount: 0`);
+                                console.log(`[CodeMedic Generated Execution]\nproblemId = ${problem.id}\nloadedTestCases = 0`);
+                            }
                         }
                     })
                     .catch(() => setProblemTestCases([]));
@@ -333,8 +339,29 @@ function AnalyzeCode({ problem, setPage, userId }) {
         setExecutionResult(null);
 
         try {
+            let testCasesToRun = problemTestCases;
+            const isDbUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(problem.id || "");
+            if ((!testCasesToRun || testCasesToRun.length === 0) && isDbUuid) {
+                try {
+                    const { data: fetchedCases, error: fetchErr } = await supabase
+                        .from("problem_test_cases")
+                        .select("id, input, expected_output, is_hidden")
+                        .eq("problem_id", problem.id);
+                    if (!fetchErr && Array.isArray(fetchedCases) && fetchedCases.length > 0) {
+                        testCasesToRun = fetchedCases;
+                        setProblemTestCases(fetchedCases);
+                    }
+                } catch (_) {}
+            }
+
+            if (problem.is_generated) {
+                console.log(
+                    `[CodeMedic Generated Execution]\nproblemId: ${problem.id}\nisGenerated: true\nexecutionConfig: ${JSON.stringify(problemConfig)}\nfunctionName: ${problemConfig.functionName}\nparameters: ${JSON.stringify(problemConfig.parameters)}\nreturnType: ${problemConfig.returnType}\noutputMode: ${problemConfig.outputMode}\ntestCaseCount: ${testCasesToRun?.length || 0}\nfirstTestInput: ${testCasesToRun?.[0]?.input || "none"}\nfirstExpectedOutput: ${testCasesToRun?.[0]?.expected_output || testCasesToRun?.[0]?.expectedOutput || "none"}`
+                );
+            }
+
             const activeLang = getLanguageConfig(selectedLanguage);
-            const result = await activeLang.execute(codeToExecute, problem, problemTestCases);
+            const result = await activeLang.execute(codeToExecute, problem, testCasesToRun);
             console.log("Local execution result:", result);
             setExecutionResult(result);
             if (typeof window !== "undefined") {
@@ -359,7 +386,7 @@ function AnalyzeCode({ problem, setPage, userId }) {
 
                         const basicResult = analyzeSubmittedCode({
                             code: codeToExecute,
-                            language,
+                            language: selectedLanguage,
                             problem,
                             thinking
                         });
@@ -368,7 +395,7 @@ function AnalyzeCode({ problem, setPage, userId }) {
                             problem,
                             thinking,
                             code: codeToExecute,
-                            language,
+                            language: selectedLanguage,
                             basicAnalysis: basicResult,
                             executionResult: result
                         });
@@ -394,7 +421,7 @@ function AnalyzeCode({ problem, setPage, userId }) {
                                 .insert({
                                     user_id: user.id,
                                     problem_id: problem.id,
-                                    language: language || "C++",
+                                    language: selectedLanguage || "C++",
                                     submitted_code: codeToExecute,
                                     status: result.status || (result.success ? "Accepted" : "Wrong Answer")
                                 })

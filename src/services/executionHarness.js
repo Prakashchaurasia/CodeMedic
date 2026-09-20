@@ -324,7 +324,7 @@ namespace CodeMedicUtils {
     inline string escapeJson(const string& s) {
         string res;
         for (char c : s) {
-            if (c == '"') res += "\\\"";
+            if (c == '"') res += "\\\\\\\"";
             else if (c == '\\\\') res += "\\\\\\\\";
             else if (c == '\\n') res += "\\\\n";
             else if (c == '\\r') res += "\\\\r";
@@ -579,24 +579,31 @@ function resolveExecutionConfigInternal(problem) {
         };
     }
 
-    // 1. Check if canonical execution_config is already attached
-    if (problem.execution_config && typeof problem.execution_config === "object") {
-        const cfg = problem.execution_config;
-        if (Array.isArray(cfg.parameters) && cfg.parameters.length > 0) {
-            // Check if this was a legacy generated problem with the hardcoded dummy single 'nums' parameter
-            if (problem.is_generated && cfg.parameters.length === 1 && cfg.parameters[0].name === "nums") {
-                const exIn = problem.examples?.[0]?.input || "";
-                const candidate = parseNamedParamsFromExample(exIn);
-                if (candidate.length > 0 && (candidate.length > 1 || candidate[0].name !== "nums")) {
-                    return {
-                        functionName: cfg.functionName || "solve",
-                        returnType: inferReturnTypeFromExample(problem),
-                        parameters: candidate,
-                        comparisonType: "return_value"
-                    };
-                }
-            }
-            return cfg;
+    // 1. Check if canonical execution_config is already attached (object, stringified, or camelCase)
+    let cfg = problem.execution_config || problem.executionConfig;
+    if (typeof cfg === "string") {
+        try { cfg = JSON.parse(cfg); } catch (_) {}
+    }
+
+    if (!cfg && problem.functionSpec && typeof problem.functionSpec === "object") {
+        cfg = {
+            functionName: problem.functionSpec.functionName || "solve",
+            returnType: problem.functionSpec.returnType || "int",
+            parameters: problem.functionSpec.parameters || [],
+            comparisonType: "return_value"
+        };
+    }
+
+    if (cfg && typeof cfg === "object") {
+        let params = cfg.parameters;
+        if (params && !Array.isArray(params) && typeof params === "object") {
+            params = Object.entries(params).map(([name, type]) => ({ name, type }));
+        }
+        if (Array.isArray(params) && params.length > 0) {
+            return {
+                ...cfg,
+                parameters: params
+            };
         }
     }
 
@@ -799,33 +806,169 @@ function escapeCppString(str) {
 }
 
 /**
+ * Normalizes test case input dynamically against declared function parameters.
+ * Supports:
+ * - JSON objects: { "nums": [1,2,3], "k": 2 } -> "nums = [1,2,3], k = 2"
+ * - JSON strings: "{\"nums\": [1,2,3], \"k\": 2}" -> "nums = [1,2,3], k = 2"
+ * - Single primitives/strings: "\"hello\"" -> s = "hello"
+ * - Pre-formatted strings: "nums = [1,2,3], k = 2" -> preserved
+ */
+export function normalizeTestCaseInput(rawInput, parameters = []) {
+    if (rawInput === null || rawInput === undefined) return "";
+    let parsed = rawInput;
+
+    // Unpack if stringified JSON
+    if (typeof parsed === "string") {
+        let trimmed = parsed.trim();
+        // Strip surrounding escaped JSON string quotes
+        if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+            try {
+                parsed = JSON.parse(trimmed);
+            } catch (_) {}
+        }
+        // If stringified JSON object or array
+        if (typeof parsed === "string" && (parsed.trim().startsWith('{') || parsed.trim().startsWith('['))) {
+            try {
+                parsed = JSON.parse(parsed.trim());
+            } catch (_) {}
+        }
+    }
+
+    // 1. If parsed is a JSON object with keys matching parameter names:
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        if (parameters.length > 0) {
+            const parts = [];
+            for (const param of parameters) {
+                const matchingKey = Object.keys(parsed).find(k => k.toLowerCase() === param.name.toLowerCase());
+                if (matchingKey !== undefined) {
+                    const val = parsed[matchingKey];
+                    let valStr;
+                    if (typeof val === "string") {
+                        valStr = `"${val.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+                    } else if (typeof val === "boolean") {
+                        valStr = val ? "true" : "false";
+                    } else {
+                        valStr = JSON.stringify(val);
+                    }
+                    parts.push(`${param.name} = ${valStr}`);
+                } else if (parameters.length === 1) {
+                    const keys = Object.keys(parsed);
+                    if (keys.length === 1) {
+                        const val = parsed[keys[0]];
+                        let valStr;
+                        if (typeof val === "string") {
+                            valStr = `"${val.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+                        } else if (typeof val === "boolean") {
+                            valStr = val ? "true" : "false";
+                        } else {
+                            valStr = JSON.stringify(val);
+                        }
+                        parts.push(`${param.name} = ${valStr}`);
+                    }
+                }
+            }
+            if (parts.length > 0) {
+                return parts.join(", ");
+            }
+        }
+    }
+
+    // 2. If already a string:
+    if (typeof parsed === "string") {
+        let str = parsed.trim();
+
+        // Check if multi-parameter string already has all parameter names
+        if (parameters.length > 1) {
+            const hasAllParams = parameters.every(p => new RegExp(`\\b${p.name}\\b\\s*=`).test(str));
+            if (hasAllParams) {
+                return str;
+            }
+        }
+
+        // Single parameter case
+        if (parameters.length === 1) {
+            const param = parameters[0];
+            if (new RegExp(`^\\s*${param.name}\\s*=`).test(str)) {
+                return str;
+            }
+            if (param.type.includes("string")) {
+                let sVal = str;
+                if (sVal.startsWith('"') && sVal.endsWith('"')) {
+                    try { sVal = JSON.parse(sVal); } catch (_) {}
+                }
+                return `${param.name} = "${sVal.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+            } else {
+                return `${param.name} = ${str}`;
+            }
+        }
+
+        return str;
+    }
+
+    // 3. Single parameter primitive or array fallback
+    if (parameters.length === 1) {
+        const param = parameters[0];
+        let valStr;
+        if (typeof parsed === "string") {
+            valStr = `"${parsed.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+        } else if (typeof parsed === "boolean") {
+            valStr = parsed ? "true" : "false";
+        } else {
+            valStr = JSON.stringify(parsed);
+        }
+        return `${param.name} = ${valStr}`;
+    }
+
+    return JSON.stringify(parsed);
+}
+
+/**
+ * Normalizes test case expected output cleanly.
+ */
+export function normalizeTestCaseOutput(rawOutput) {
+    if (rawOutput === null || rawOutput === undefined) return "";
+    let str = typeof rawOutput === "string" ? rawOutput.trim() : JSON.stringify(rawOutput);
+    // Unpack double encoded JSON string
+    if (str.startsWith('"') && str.endsWith('"')) {
+        try {
+            const unescaped = JSON.parse(str);
+            if (typeof unescaped === "string") {
+                str = unescaped.trim();
+            } else {
+                str = JSON.stringify(unescaped);
+            }
+        } catch (_) {}
+    }
+    // Canonicalize boolean output strings
+    if (str.toLowerCase() === "true") return "true";
+    if (str.toLowerCase() === "false") return "false";
+    return str;
+}
+
+/**
  * Prepares test cases for execution harness from problem examples or test case rows.
  */
 export function extractTestCases(problem, rawTestCases = []) {
+    const config = inferExecutionConfig(problem);
+    const params = config.parameters || [];
     const cases = [];
 
     // First use explicit test cases passed in
     if (Array.isArray(rawTestCases) && rawTestCases.length > 0) {
         for (let i = 0; i < rawTestCases.length; i++) {
             const tc = rawTestCases[i];
-            let inputStr = typeof tc.input === "string" ? tc.input : JSON.stringify(tc.input);
-            let expectedStr = typeof tc.expected_output !== "undefined" 
+            const rawIn = typeof tc.input !== "undefined" ? tc.input : "";
+            const rawOut = typeof tc.expected_output !== "undefined" 
                 ? tc.expected_output 
                 : (typeof tc.expectedOutput !== "undefined" ? tc.expectedOutput : "");
-            if (typeof expectedStr !== "string") expectedStr = JSON.stringify(expectedStr);
 
-            // Strip surrounding JSON quotes if it was double-encoded
-            if (inputStr.startsWith('"') && inputStr.endsWith('"')) {
-                try { inputStr = JSON.parse(inputStr); } catch (_) {}
-            }
-            if (expectedStr.startsWith('"') && expectedStr.endsWith('"')) {
-                try { expectedStr = JSON.parse(expectedStr); } catch (_) {}
-            }
+            const normInput = normalizeTestCaseInput(rawIn, params);
+            const normOutput = normalizeTestCaseOutput(rawOut);
 
             cases.push({
                 id: i + 1,
-                input: inputStr,
-                expectedOutput: expectedStr
+                input: normInput,
+                expectedOutput: normOutput
             });
         }
     }
@@ -833,10 +976,12 @@ export function extractTestCases(problem, rawTestCases = []) {
     // If no explicit test cases, use problem.examples
     if (cases.length === 0 && Array.isArray(problem?.examples)) {
         problem.examples.forEach((ex, idx) => {
+            const normInput = normalizeTestCaseInput(ex.input || "", params);
+            const normOutput = normalizeTestCaseOutput(ex.output || "");
             cases.push({
                 id: idx + 1,
-                input: ex.input || "",
-                expectedOutput: ex.output || ""
+                input: normInput,
+                expectedOutput: normOutput
             });
         });
     }

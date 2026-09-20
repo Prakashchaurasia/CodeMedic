@@ -4,7 +4,7 @@
  * with an exact 5000ms execution limit, test case evaluation, and structured results.
  */
 
-import { inferExecutionConfig, parseNamedParamsFromExample } from "./executionHarness.js";
+import { inferExecutionConfig, parseNamedParamsFromExample, normalizeTestCaseInput, normalizeTestCaseOutput } from "./executionHarness.js";
 
 /**
  * Maps C++ DSA types to standard JavaScript JSDoc types.
@@ -273,11 +273,13 @@ export async function executeJsSolution(studentCode, problem, testCases = []) {
     if (Array.isArray(problem.examples) && problem.examples.length > 0) {
         for (let i = 0; i < problem.examples.length; i++) {
             const ex = problem.examples[i];
+            const normIn = normalizeTestCaseInput(ex.input || "", config.parameters);
+            const normOut = normalizeTestCaseOutput(ex.output || "");
             allTestCases.push({
                 id: i + 1,
-                rawInput: ex.input || "",
-                expected: ex.output || "",
-                args: parseJsInputArgs(ex.input, config.parameters)
+                rawInput: normIn,
+                expected: normOut,
+                args: parseJsInputArgs(normIn, config.parameters)
             });
         }
     }
@@ -285,11 +287,17 @@ export async function executeJsSolution(studentCode, problem, testCases = []) {
     if (Array.isArray(testCases) && testCases.length > 0) {
         for (let i = 0; i < testCases.length; i++) {
             const tc = testCases[i];
+            const rawIn = typeof tc.input !== "undefined" ? tc.input : "";
+            const rawOut = typeof tc.expected_output !== "undefined" 
+                ? tc.expected_output 
+                : (typeof tc.expectedOutput !== "undefined" ? tc.expectedOutput : tc.output || "");
+            const normIn = normalizeTestCaseInput(rawIn, config.parameters);
+            const normOut = normalizeTestCaseOutput(rawOut);
             allTestCases.push({
                 id: tc.id || (allTestCases.length + 1),
-                rawInput: tc.input || "",
-                expected: tc.expected_output || tc.output || "",
-                args: parseJsInputArgs(tc.input, config.parameters)
+                rawInput: normIn,
+                expected: normOut,
+                args: parseJsInputArgs(normIn, config.parameters)
             });
         }
     }
