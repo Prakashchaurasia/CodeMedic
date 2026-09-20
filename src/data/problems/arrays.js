@@ -20,7 +20,7 @@ export const ARRAY_PROBLEMS = [
         "description": "Given an array of integers nums and an integer k, rotate the array to the right by k positions in-place.",
         "constraints": "1 <= nums.length <= 10^5\n0 <= k <= 10^5\n-10^4 <= nums[i] <= 10^4",
         "input_format": "vector<int>& nums, int k",
-        "output_format": "vector<int>",
+        "output_format": "void",
         "examples": [
             {
                 "input": "nums = [1,2,3,4,5,6,7], k = 3",
@@ -41,7 +41,7 @@ export const ARRAY_PROBLEMS = [
         "learning_objective": "Master algorithmic problem solving for Rotate Array by K Positions.",
         "execution_config": {
             "functionName": "rotate",
-            "returnType": "vector<int>",
+            "returnType": "void",
             "parameters": [
                 {
                     "name": "nums",
@@ -52,7 +52,11 @@ export const ARRAY_PROBLEMS = [
                     "type": "int"
                 }
             ],
-            "comparisonType": "return_value"
+            "outputMode": "MUTATED_PARAMETER",
+            "mutates": [
+                "nums"
+            ],
+            "comparisonType": "mutated_parameter"
         },
         "source": "CodeMedic Library",
         "is_generated": false,
@@ -1138,10 +1142,10 @@ export const ARRAY_PROBLEMS = [
         ],
         "expected_time": "O(n^2)",
         "expected_space": "O(1)",
-        "description": "You are given an n x n 2D matrix representing an image, rotate the image by 90 degrees (clockwise) in-place. Return the rotated matrix.",
+        "description": "You are given an n x n 2D matrix representing an image, rotate the image by 90 degrees (clockwise) in-place.",
         "constraints": "n == matrix.length == matrix[i].length\n1 <= n <= 20\n-1000 <= matrix[i][j] <= 1000",
         "input_format": "vector<vector<int>>& matrix",
-        "output_format": "vector<vector<int>>",
+        "output_format": "void",
         "examples": [
             {
                 "input": "matrix = [[1,2,3],[4,5,6],[7,8,9]]",
@@ -1162,14 +1166,18 @@ export const ARRAY_PROBLEMS = [
         "learning_objective": "Master algorithmic problem solving for Rotate Image 90 Degrees Clockwise.",
         "execution_config": {
             "functionName": "rotateImage",
-            "returnType": "vector<vector<int>>",
+            "returnType": "void",
             "parameters": [
                 {
                     "name": "matrix",
                     "type": "vector<vector<int>>&"
                 }
             ],
-            "comparisonType": "return_value"
+            "outputMode": "MUTATED_PARAMETER",
+            "mutates": [
+                "matrix"
+            ],
+            "comparisonType": "mutated_parameter"
         },
         "source": "CodeMedic Library",
         "is_generated": false,

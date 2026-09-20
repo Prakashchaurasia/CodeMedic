@@ -39,10 +39,15 @@ var solve = function() {
     }
 
     const params = config.parameters || [];
+    const isMutated = config.outputMode === "MUTATED_PARAMETER" || config.returnType === "void";
+    const mutatedName = (config.mutates && config.mutates[0]) || (params[0]?.name) || "parameter";
+
     const jsDocParams = params
         .map(p => ` * @param {${mapTypeToJs(p.type)}} ${p.name}`)
         .join("\n");
-    const jsDocReturn = ` * @return {${mapTypeToJs(config.returnType)}}`;
+    const jsDocReturn = isMutated
+        ? ` * @return {void} Do not return anything, modify ${mutatedName} in-place instead.`
+        : ` * @return {${mapTypeToJs(config.returnType)}}`;
     const paramsList = params.map(p => p.name).join(", ");
 
     return `/**
@@ -222,8 +227,12 @@ self.onmessage = function(e) {
             
             // Clone arguments to avoid mutation issues
             const args = JSON.parse(JSON.stringify(tc.args));
-            const actual = fn(...args);
+            const actualRet = fn(...args);
             const tcEnd = performance.now();
+
+            const actual = (e.data.isMutated && e.data.mutatedIndex >= 0 && e.data.mutatedIndex < args.length)
+                ? args[e.data.mutatedIndex]
+                : actualRet;
 
             results.push({
                 testIndex: i,
@@ -255,6 +264,9 @@ self.onmessage = function(e) {
 export async function executeJsSolution(studentCode, problem, testCases = []) {
     const config = inferExecutionConfig(problem);
     const functionName = config.functionName || "solve";
+    const isMutated = config.outputMode === "MUTATED_PARAMETER" || config.returnType === "void";
+    const mutatedParamName = (config.mutates && config.mutates[0]) || (config.parameters?.[0]?.name);
+    const mutatedIndex = Math.max(0, (config.parameters || []).findIndex(p => p.name === mutatedParamName));
 
     // Combine examples and custom test cases
     const allTestCases = [];
@@ -289,6 +301,91 @@ export async function executeJsSolution(studentCode, problem, testCases = []) {
             expected: "",
             args: []
         });
+    }
+
+    // In-thread fallback if Worker or URL.createObjectURL is not available (e.g. Node CLI testing or restricted environments)
+    if (typeof Worker === "undefined" || typeof URL.createObjectURL !== "function") {
+        try {
+            function ListNode(val, next) {
+                this.val = (val === undefined ? 0 : val);
+                this.next = (next === undefined ? null : next);
+            }
+            function TreeNode(val, left, right) {
+                this.val = (val === undefined ? 0 : val);
+                this.left = (left === undefined ? null : left);
+                this.right = (right === undefined ? null : right);
+            }
+            const studentScope = {};
+            const runner = new Function('ListNode', 'TreeNode', `
+                ${studentCode}
+                if (typeof Solution !== 'undefined') {
+                    return { instance: new Solution() };
+                }
+                if (typeof ${functionName} === 'function') {
+                    return { fn: ${functionName} };
+                }
+                return {};
+            `);
+            const exported = runner.call(studentScope, ListNode, TreeNode);
+            let fn;
+            if (exported.instance && typeof exported.instance[functionName] === 'function') {
+                fn = exported.instance[functionName].bind(exported.instance);
+            } else if (exported.fn) {
+                fn = exported.fn;
+            } else {
+                throw new Error("Could not find function '" + functionName + "' in submitted code.");
+            }
+
+            const structuredCases = allTestCases.map((tc, i) => {
+                const args = JSON.parse(JSON.stringify(tc.args));
+                const tcStart = Date.now();
+                const actualRet = fn(...args);
+                const tcEnd = Date.now();
+                const actual = (isMutated && mutatedIndex >= 0 && mutatedIndex < args.length)
+                    ? args[mutatedIndex]
+                    : actualRet;
+                const passed = compareOutputs(actual, tc.expected);
+                return {
+                    testIndex: i,
+                    testId: tc.id || (i + 1),
+                    passed,
+                    input: tc.rawInput,
+                    expected: String(tc.expected),
+                    actual: typeof actual === "object" ? JSON.stringify(actual) : String(actual),
+                    errorType: passed ? null : "Wrong Answer",
+                    durationMs: tcEnd - tcStart
+                };
+            });
+
+            const passedTests = structuredCases.filter(c => c.passed).length;
+            const totalTests = structuredCases.length;
+            const allPassed = passedTests === totalTests && totalTests > 0;
+
+            return Promise.resolve({
+                success: allPassed,
+                status: allPassed ? "Accepted" : "Wrong Answer",
+                message: allPassed
+                    ? `Accepted (${passedTests}/${totalTests} test cases passed)`
+                    : `Wrong Answer (${passedTests}/${totalTests} test cases passed)`,
+                testCases: structuredCases,
+                passedTests,
+                totalTests,
+                compilationError: null,
+                executionTimeMs: 1
+            });
+        } catch (err) {
+            const isSyntax = err.name === "SyntaxError" || (err.message && (err.message.includes("SyntaxError") || err.message.includes("Unexpected token")));
+            return Promise.resolve({
+                success: false,
+                status: isSyntax ? "Compilation Error" : "Runtime Error",
+                message: err.message || String(err),
+                testCases: [],
+                passedTests: 0,
+                totalTests: allTestCases.length,
+                compilationError: isSyntax ? err.message : null,
+                executionTimeMs: 0
+            });
+        }
     }
 
     return new Promise((resolve) => {
@@ -395,7 +492,9 @@ export async function executeJsSolution(studentCode, problem, testCases = []) {
             worker.postMessage({
                 studentCode,
                 functionName,
-                testCases: allTestCases
+                testCases: allTestCases,
+                isMutated,
+                mutatedIndex
             });
 
         } catch (err) {

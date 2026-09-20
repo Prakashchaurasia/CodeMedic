@@ -14,7 +14,9 @@ export function getArrayProblems() {
             description: "Given an array of integers nums and an integer k, rotate the array to the right by k positions in-place.",
             constraints: "1 <= nums.length <= 10^5\n0 <= k <= 10^5\n-10^4 <= nums[i] <= 10^4",
             fnName: "rotate",
-            returnType: "vector<int>",
+            returnType: "void",
+            outputMode: "MUTATED_PARAMETER",
+            mutates: ["nums"],
             params: [
                 { name: "nums", type: "vector<int>&" },
                 { name: "k", type: "int" }

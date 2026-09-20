@@ -51,6 +51,29 @@ function App() {
     }, [page]);
 
     /*
+        Full logout handler: completely resets all in-memory user and protected state
+    */
+    function handleFullLogout() {
+        setSession(null);
+        setProfile(null);
+        setSelectedProblem(null);
+        setPage("Dashboard");
+        setShowSignup(false);
+        setMobileSidebarOpen(false);
+        setAuthNotification(null);
+        try {
+            const keysToRemove = [];
+            for (let i = 0; i < sessionStorage.length; i++) {
+                const k = sessionStorage.key(i);
+                if (k && k.startsWith("codemedic_")) {
+                    keysToRemove.push(k);
+                }
+            }
+            keysToRemove.forEach((k) => sessionStorage.removeItem(k));
+        } catch (_) {}
+    }
+
+    /*
         Get the user's unified profile
     */
     async function fetchProfile(userId) {
@@ -78,15 +101,17 @@ function App() {
         async function getSession() {
             try {
                 const { data } = await supabase.auth.getSession();
-                setSession(data.session);
-
-                if (data.session) {
+                if (data.session && data.session.user) {
+                    setSession(data.session);
                     setAuthNotification(null);
                     clearAuthUrlParams();
                     await fetchProfile(data.session.user.id);
+                } else {
+                    handleFullLogout();
                 }
             } catch (err) {
                 console.error("Get session error:", err);
+                handleFullLogout();
             } finally {
                 setLoading(false);
             }
@@ -99,19 +124,15 @@ function App() {
         */
         const {
             data: { subscription },
-        } = supabase.auth.onAuthStateChange((_event, newSession) => {
-            setSession(newSession);
-
-            if (newSession) {
+        } = supabase.auth.onAuthStateChange((event, newSession) => {
+            console.log("Supabase auth event:", event, !!newSession);
+            if (event === "SIGNED_OUT" || !newSession || !newSession.user) {
+                handleFullLogout();
+            } else if (newSession && newSession.user) {
+                setSession(newSession);
                 setAuthNotification(null);
                 clearAuthUrlParams();
                 fetchProfile(newSession.user.id);
-            } else {
-                setProfile(null);
-                try {
-                    sessionStorage.removeItem("codemedic_selected_problem");
-                    sessionStorage.removeItem("codemedic_active_page");
-                } catch (_) {}
             }
         });
 
@@ -136,14 +157,14 @@ function App() {
     }
 
     /*
-        Loading screen
+        Loading screen: do not render protected pages before session is verified
     */
     if (loading) {
         return (
             <div className="auth-page">
                 <div className="auth-card">
                     <h1>CodeMedic</h1>
-                    <p className="auth-subtitle">Loading...</p>
+                    <p className="auth-subtitle">Checking your session...</p>
                 </div>
             </div>
         );
@@ -152,7 +173,7 @@ function App() {
     /*
         User is not logged in
     */
-    if (!session) {
+    if (!session || !session.user) {
         if (showSignup) {
             return (
                 <Signup
@@ -189,6 +210,7 @@ function App() {
                 setPage={setPage}
                 profile={profile}
                 user={session?.user}
+                onLogout={handleFullLogout}
             />
 
             <div className="layout">
@@ -206,7 +228,7 @@ function App() {
 
                     {page === "Dashboard" && (
                         <Dashboard
-                            userName={profile?.name || session.user.email?.split("@")[0]}
+                            userName={profile?.name || session?.user?.email?.split("@")[0] || "Student"}
                             setPage={setPage}
                             onOpenProblem={openAnalyzeCode}
                         />
@@ -228,6 +250,7 @@ function App() {
                         <AnalyzeCode
                             problem={selectedProblem}
                             setPage={setPage}
+                            userId={session?.user?.id}
                         />
                     )}
 

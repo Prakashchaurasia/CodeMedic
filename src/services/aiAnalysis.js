@@ -1,4 +1,5 @@
 import { supabase } from "../lib/supabase";
+import { inferExecutionConfig } from "./executionHarness.js";
 
 export async function analyzeWithAI({
     problem,
@@ -8,6 +9,8 @@ export async function analyzeWithAI({
     basicAnalysis,
     executionResult
 }) {
+    const canonicalConfig = inferExecutionConfig(problem);
+
     const analysisRequest = {
         problem: {
             title: problem.title,
@@ -20,8 +23,14 @@ export async function analyzeWithAI({
             expectedSpace: problem.expected_space || problem.expectedSpace || "",
             constraints: problem.constraints,
             examples: problem.examples,
-            learningObjective: problem.learning_objective || problem.learningObjective || ""
+            learningObjective: problem.learning_objective || problem.learningObjective || "",
+            functionName: canonicalConfig.functionName,
+            parameters: canonicalConfig.parameters,
+            returnType: canonicalConfig.returnType,
+            outputMode: canonicalConfig.outputMode,
+            mutatedParameters: canonicalConfig.mutates
         },
+        executionConfig: canonicalConfig,
 
         thinking: {
             dataStructures:

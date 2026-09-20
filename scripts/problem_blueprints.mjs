@@ -91,7 +91,9 @@ export function createProblem({
             functionName: fnName,
             returnType,
             parameters: params,
-            comparisonType: "return_value"
+            outputMode: outputMode || (returnType === "void" ? "MUTATED_PARAMETER" : "RETURN_VALUE"),
+            mutates: mutates || (outputMode === "MUTATED_PARAMETER" || returnType === "void" ? [(params[0]?.name || "")] : []),
+            comparisonType: (outputMode === "MUTATED_PARAMETER" || returnType === "void") ? "mutated_parameter" : "return_value"
         },
         source: "CodeMedic Library",
         is_generated: false,

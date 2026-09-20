@@ -488,9 +488,59 @@ export function parseSolutionSignature(studentCode) {
 }
 
 /**
+ * Normalizes an execution configuration to guarantee canonical outputMode,
+ * parameter types, and mutation metadata.
+ */
+export function normalizeExecutionConfig(rawConfig) {
+    if (!rawConfig || typeof rawConfig !== "object") {
+        return {
+            functionName: "solve",
+            returnType: "int",
+            parameters: [],
+            outputMode: "RETURN_VALUE",
+            mutates: [],
+            comparisonType: "return_value"
+        };
+    }
+
+    const returnType = (rawConfig.returnType || "int").trim();
+    const isVoid = returnType.toLowerCase() === "void";
+    let outputMode = (rawConfig.outputMode || "").toUpperCase();
+
+    if (!outputMode) {
+        if (isVoid || rawConfig.comparisonType === "mutated_parameter") {
+            outputMode = "MUTATED_PARAMETER";
+        } else {
+            outputMode = "RETURN_VALUE";
+        }
+    }
+
+    let mutates = Array.isArray(rawConfig.mutates) ? [...rawConfig.mutates] : [];
+    if (outputMode === "MUTATED_PARAMETER" && mutates.length === 0) {
+        if (Array.isArray(rawConfig.parameters) && rawConfig.parameters.length > 0) {
+            mutates = [rawConfig.parameters[0].name];
+        }
+    }
+
+    return {
+        ...rawConfig,
+        functionName: rawConfig.functionName || "solve",
+        returnType,
+        parameters: Array.isArray(rawConfig.parameters) ? rawConfig.parameters : [],
+        outputMode,
+        mutates,
+        comparisonType: outputMode === "MUTATED_PARAMETER" ? "mutated_parameter" : "return_value"
+    };
+}
+
+/**
  * Infers an execution configuration from problem metadata if none is provided.
  */
 export function inferExecutionConfig(problem) {
+    return normalizeExecutionConfig(resolveExecutionConfigInternal(problem));
+}
+
+function resolveExecutionConfigInternal(problem) {
     if (!problem) {
         return {
             functionName: "solve",
@@ -780,6 +830,9 @@ export function generateCppHarness(studentCode, problem, testCases = []) {
     const config = inferExecutionConfig(problem);
     const resolvedCases = extractTestCases(problem, testCases);
     const params = config.parameters || [];
+    const isMutated = config.outputMode === "MUTATED_PARAMETER" || config.returnType === "void";
+    const mutatedParamName = (config.mutates && config.mutates[0]) || (params[0]?.name);
+    const mutatedIdx = Math.max(0, params.findIndex(p => p.name === mutatedParamName));
 
     // Helper to generate parsing code for each parameter
     function generateParamParser(type, rawVarName, targetVarName) {
@@ -829,14 +882,23 @@ export function generateCppHarness(studentCode, problem, testCases = []) {
     // Universal multi-parameter runner invocation
     let runnerInvocation = "";
     if (params.length === 0) {
-        runnerInvocation = `
+        runnerInvocation = isMutated
+            ? `
+            string rawIn = tc.rawInput;
+            auto start = chrono::high_resolution_clock::now();
+            solver.${config.functionName}();
+            auto end = chrono::high_resolution_clock::now();
+            double durationMs = chrono::duration<double, milli>(end - start).count();
+            string actualStr = "Finished";
+            `
+            : `
             string rawIn = tc.rawInput;
             auto start = chrono::high_resolution_clock::now();
             auto actualResult = solver.${config.functionName}();
             auto end = chrono::high_resolution_clock::now();
             double durationMs = chrono::duration<double, milli>(end - start).count();
             string actualStr = CodeMedicUtils::serialize(actualResult);
-        `;
+            `;
     } else {
         const paramExtractors = params.map((p, idx) => `
             string arg${idx} = (paramParts.size() > ${idx}) ? paramParts[${idx}] : "";
@@ -864,13 +926,13 @@ export function generateCppHarness(studentCode, problem, testCases = []) {
         `).join("\n");
 
         const argsList = params.map((_, idx) => `p${idx}`).join(", ");
-        const invokeBlock = (config.returnType === "void")
+        const invokeBlock = isMutated
             ? `
             auto start = chrono::high_resolution_clock::now();
             solver.${config.functionName}(${argsList});
             auto end = chrono::high_resolution_clock::now();
             double durationMs = chrono::duration<double, milli>(end - start).count();
-            string actualStr = ${params.length > 0 ? `CodeMedicUtils::serialize(p0)` : `"Finished"`};
+            string actualStr = ${params.length > 0 ? `CodeMedicUtils::serialize(p${mutatedIdx})` : `"Finished"`};
             `
             : `
             auto start = chrono::high_resolution_clock::now();

@@ -1,5 +1,6 @@
-import { supabase } from "../lib/supabase";
+import { supabase } from "../lib/supabase.js";
 import { ALL_EXPANDED_PROBLEMS } from "../data/problems/index.js";
+import { normalizeExecutionConfig } from "./executionHarness.js";
 
 export const CURATED_PERMANENT_PROBLEMS = [
     {
@@ -360,11 +361,25 @@ export async function getProblemsForUser(userId) {
         // Overlay records from DB (includes user-generated problems and any DB updates)
         if (dbProblems && Array.isArray(dbProblems)) {
             for (const p of dbProblems) {
-                const existing = problemMap.get(p.id) || {};
-                problemMap.set(p.id, {
-                    ...existing,
-                    ...p
-                });
+                const existing = problemMap.get(p.id);
+                if (existing && !existing.is_generated) {
+                    // For permanent problems, maintain the canonical local execution_config & metadata
+                    problemMap.set(p.id, {
+                        ...p,
+                        ...existing,
+                        execution_config: normalizeExecutionConfig(existing.execution_config || p.execution_config),
+                        created_at: p.created_at || existing.created_at
+                    });
+                } else {
+                    const merged = {
+                        ...(existing || {}),
+                        ...p
+                    };
+                    if (merged.execution_config) {
+                        merged.execution_config = normalizeExecutionConfig(merged.execution_config);
+                    }
+                    problemMap.set(p.id, merged);
+                }
             }
         }
 

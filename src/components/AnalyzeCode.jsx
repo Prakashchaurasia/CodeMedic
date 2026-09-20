@@ -7,11 +7,24 @@ import { SUPPORTED_LANGUAGES, getLanguageConfig } from "../services/languageServ
 import { inferExecutionConfig } from "../services/executionHarness";
 import CodeEditor from "./CodeEditor";
 
-function AnalyzeCode({ problem, setPage }) {
+function AnalyzeCode({ problem, setPage, userId }) {
     const [selectedLanguage, setSelectedLanguage] = useState("cpp");
+
+    const getDraftKey = (uid, pid, lang) => {
+        if (!uid || !pid) return null;
+        return `codemedic_draft_${uid}_${pid}_${lang}`;
+    };
+
+    const currentDraftKey = getDraftKey(userId, problem?.id, selectedLanguage);
+
     const [code, setCode] = useState(() => {
         if (!problem) return "";
         try {
+            const key = getDraftKey(userId, problem.id, "cpp");
+            if (key && typeof window !== "undefined" && window.sessionStorage) {
+                const saved = window.sessionStorage.getItem(key);
+                if (saved !== null) return saved;
+            }
             return getLanguageConfig("cpp").generateStarterCode(problem);
         } catch (_) {
             return "";
@@ -64,12 +77,18 @@ function AnalyzeCode({ problem, setPage }) {
     // Submission / Attempt state
     const [problemAttemptId, setProblemAttemptId] = useState(null);
 
-    // Initialize starter code and fetch test cases when problem or language changes
+    // Initialize starter code or restore user draft, and fetch test cases when problem, language, or user changes
     useEffect(() => {
         if (problem) {
             const currentLang = getLanguageConfig(selectedLanguage);
             const starter = currentLang.generateStarterCode(problem);
-            setCode(starter);
+            const key = getDraftKey(userId, problem.id, selectedLanguage);
+            let initialCode = starter;
+            if (key && typeof window !== "undefined" && window.sessionStorage) {
+                const saved = window.sessionStorage.getItem(key);
+                if (saved !== null) initialCode = saved;
+            }
+            setCode(initialCode);
             setExecutionResult(null);
             setAnalysis(null);
             setHelpLevel(0);
@@ -98,13 +117,19 @@ function AnalyzeCode({ problem, setPage }) {
                 setProblemTestCases([]);
             }
         }
-    }, [problem?.id, problem?.title, selectedLanguage]);
+    }, [problem?.id, problem?.title, selectedLanguage, userId]);
 
     function handleLanguageChange(newLangId) {
         setSelectedLanguage(newLangId);
         const nextLang = getLanguageConfig(newLangId);
         if (problem) {
-            setCode(nextLang.generateStarterCode(problem));
+            const key = getDraftKey(userId, problem.id, newLangId);
+            let nextCode = nextLang.generateStarterCode(problem);
+            if (key && typeof window !== "undefined" && window.sessionStorage) {
+                const saved = window.sessionStorage.getItem(key);
+                if (saved !== null) nextCode = saved;
+            }
+            setCode(nextCode);
         }
         setExecutionResult(null);
         setProblemAttemptId(null);
@@ -543,6 +568,10 @@ function AnalyzeCode({ problem, setPage }) {
         try {
             const activeLang = getLanguageConfig(selectedLanguage);
             const starter = activeLang.generateStarterCode(problem);
+            const key = getDraftKey(userId, problem.id, selectedLanguage);
+            if (key && typeof window !== "undefined" && window.sessionStorage) {
+                window.sessionStorage.removeItem(key);
+            }
             setCode(starter);
         } catch (_) {
             setCode("");
@@ -996,6 +1025,9 @@ function AnalyzeCode({ problem, setPage }) {
                         value={code}
                         onChange={(newCode) => {
                             setCode(newCode);
+                            if (currentDraftKey && typeof window !== "undefined" && window.sessionStorage) {
+                                window.sessionStorage.setItem(currentDraftKey, newCode);
+                            }
                             if (executionResult) setExecutionResult(null);
                             if (problemAttemptId) setProblemAttemptId(null);
                         }}

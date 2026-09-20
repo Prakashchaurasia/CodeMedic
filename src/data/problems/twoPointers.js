@@ -233,10 +233,10 @@ export const TWO_POINTER_PROBLEMS = [
         ],
         "expected_time": "O(n)",
         "expected_space": "O(1)",
-        "description": "Given an array nums with n objects colored red, white, or blue, sort them in-place so that objects of the same color are adjacent, with the colors in the order red (0), white (1), and blue (2). Return the sorted array.",
+        "description": "Given an array nums with n objects colored red, white, or blue, sort them in-place so that objects of the same color are adjacent, with the colors in the order red (0), white (1), and blue (2).",
         "constraints": "n == nums.length\n1 <= n <= 300\nnums[i] is either 0, 1, or 2.",
         "input_format": "vector<int>& nums",
-        "output_format": "vector<int>",
+        "output_format": "void",
         "examples": [
             {
                 "input": "nums = [2,0,2,1,1,0]",
@@ -257,14 +257,18 @@ export const TWO_POINTER_PROBLEMS = [
         "learning_objective": "Master algorithmic problem solving for Sort Colors (Dutch National Flag).",
         "execution_config": {
             "functionName": "sortColors",
-            "returnType": "vector<int>",
+            "returnType": "void",
             "parameters": [
                 {
                     "name": "nums",
                     "type": "vector<int>&"
                 }
             ],
-            "comparisonType": "return_value"
+            "outputMode": "MUTATED_PARAMETER",
+            "mutates": [
+                "nums"
+            ],
+            "comparisonType": "mutated_parameter"
         },
         "source": "CodeMedic Library",
         "is_generated": false,
@@ -843,7 +847,7 @@ export const TWO_POINTER_PROBLEMS = [
         "description": "Given an integer array nums, move all 0's to the end of it while maintaining the relative order of the non-zero elements in-place.",
         "constraints": "1 <= nums.length <= 10^4\n-2^31 <= nums[i] <= 2^31 - 1",
         "input_format": "vector<int>& nums",
-        "output_format": "vector<int>",
+        "output_format": "void",
         "examples": [
             {
                 "input": "nums = [0,1,0,3,12]",
@@ -864,14 +868,18 @@ export const TWO_POINTER_PROBLEMS = [
         "learning_objective": "Master algorithmic problem solving for Move Zeroes to End.",
         "execution_config": {
             "functionName": "moveZeroes",
-            "returnType": "vector<int>",
+            "returnType": "void",
             "parameters": [
                 {
                     "name": "nums",
                     "type": "vector<int>&"
                 }
             ],
-            "comparisonType": "return_value"
+            "outputMode": "MUTATED_PARAMETER",
+            "mutates": [
+                "nums"
+            ],
+            "comparisonType": "mutated_parameter"
         },
         "source": "CodeMedic Library",
         "is_generated": false,

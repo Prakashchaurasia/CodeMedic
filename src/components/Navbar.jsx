@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { supabase } from "../lib/supabase";
 
-function Navbar({ onMenuClick, setPage, profile, user }) {
+function Navbar({ onMenuClick, setPage, profile, user, onLogout }) {
 
     const [showProfile, setShowProfile] = useState(false);
 
@@ -10,9 +10,18 @@ function Navbar({ onMenuClick, setPage, profile, user }) {
     const role = profile?.role || "Student";
 
     async function handleLogout() {
-        const { error } = await supabase.auth.signOut();
-        if (error) {
-            console.error("Logout error:", error);
+        setShowProfile(false);
+        try {
+            const { error } = await supabase.auth.signOut();
+            if (error) {
+                console.error("Logout error:", error);
+            }
+        } catch (err) {
+            console.error("Logout exception:", err);
+        } finally {
+            if (onLogout) {
+                onLogout();
+            }
         }
     }
 
