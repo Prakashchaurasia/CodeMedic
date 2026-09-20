@@ -6,6 +6,7 @@ let emceptionInstance = null;
 let emceptionInitPromise = null;
 let isExecuting = false;
 let isRunQueued = false;
+let isPrewarmed = false;
 let runtimeStatus = "idle"; // "idle" | "warming" | "ready" | "unavailable"
 const statusListeners = new Set();
 
@@ -110,28 +111,34 @@ export async function initCppEnvironment() {
 
             // Pre-warm Clang & standard libraries in the background.
             // This pulls clang.brdata and include.brdata into IndexedDB so user execution is instant!
-            console.log("[CodeMedic Executor] pre-warming Clang and standard libraries in background...");
-            const warmupExecId = "warmup_" + Math.random().toString(36).slice(2, 6);
-            const warmupSource = `#include <vector>\n#include <iostream>\nint main() { return 0; }\n`;
-            const warmupPaths = {
-                sourcePath: `/home/user/default/${warmupExecId}.cpp`,
-                objectPath: `${warmupExecId}.o`,
-                wasmPath: `${warmupExecId}.wasm`,
-            };
+            if (!isPrewarmed) {
+                console.log("[CodeMedic Executor] pre-warming Clang and standard libraries in background...");
+                const warmupExecId = "warmup_" + Math.random().toString(36).slice(2, 6);
+                const warmupSource = `#include <vector>\n#include <iostream>\nint main() { return 0; }\n`;
+                const warmupPaths = {
+                    sourcePath: `/home/user/default/${warmupExecId}.cpp`,
+                    objectPath: `${warmupExecId}.o`,
+                    wasmPath: `${warmupExecId}.wasm`,
+                };
 
-            await compileAndRun(instance, {
-                toolchain: ToolchainPreset.CPP,
-                source: warmupSource,
-                cwd: "/home/user/default",
-                paths: warmupPaths,
-            });
+                await compileAndRun(instance, {
+                    toolchain: ToolchainPreset.CPP,
+                    source: warmupSource,
+                    cwd: "/home/user/default",
+                    paths: warmupPaths,
+                });
 
-            // Clean up temporary warmup artifacts
-            try {
-                await instance.workspace.unlink(warmupPaths.sourcePath).catch(() => {});
-                await instance.workspace.unlink(`/home/user/default/${warmupPaths.objectPath}`).catch(() => {});
-                await instance.workspace.unlink(`/home/user/default/${warmupPaths.wasmPath}`).catch(() => {});
-            } catch (_) {}
+                // Clean up temporary warmup artifacts
+                try {
+                    await instance.workspace.unlink(warmupPaths.sourcePath).catch(() => {});
+                    await instance.workspace.unlink(`/home/user/default/${warmupPaths.objectPath}`).catch(() => {});
+                    await instance.workspace.unlink(`/home/user/default/${warmupPaths.wasmPath}`).catch(() => {});
+                } catch (_) {}
+
+                isPrewarmed = true;
+            } else {
+                console.log("[CodeMedic Executor] IndexedDB cache is already warm; reusing cached toolchain.");
+            }
 
             if (bootTimer) clearTimeout(bootTimer);
 
