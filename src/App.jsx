@@ -15,14 +15,10 @@ import Progress from "./components/Progress";
 import Revision from "./components/Revision";
 import Profile from "./components/Profile";
 import Settings from "./components/Settings";
-import { preloadCppExecutor } from "./services/cppExecutor";
 import { getUserProfile } from "./services/profileService";
 import { parseAuthUrlParams, clearAuthUrlParams } from "./services/authService";
 
 function App() {
-    useEffect(() => {
-        preloadCppExecutor();
-    }, []);
     const [session, setSession] = useState(null);
     const [profile, setProfile] = useState(null);
     const [loading, setLoading] = useState(true);

@@ -5,7 +5,8 @@ import { generateCppHarness, parseHarnessOutput } from "./executionHarness";
 let emceptionInstance = null;
 let emceptionInitPromise = null;
 let isExecuting = false;
-let runtimeStatus = "idle"; // "idle" | "warming" | "ready"
+let isRunQueued = false;
+let runtimeStatus = "idle"; // "idle" | "warming" | "ready" | "unavailable"
 const statusListeners = new Set();
 
 /**
@@ -54,18 +55,24 @@ export function terminateAndResetEmception() {
     }
     emceptionInitPromise = null;
     isExecuting = false;
+    isRunQueued = false;
     setStatus("idle");
     console.log("[CodeMedic Executor] worker terminated/reset");
 }
 
 /**
- * Returns a running Emception instance or initializes a new one.
- * Cold load downloads manifest from local /cdn/manifest.json.
- * Warm runs reuse the healthy alive singleton worker.
- * Bounded by a 25-second deterministic infrastructure startup timeout.
+ * Shared Singleton C++ WASM/Emception Environment Initializer.
+ * Starts in the background as soon as AnalyzeCode opens.
+ * 
+ * Guarantees:
+ * - Exactly ONE background initialization is spawned (shared singleton Promise).
+ * - Downloads Clang and libc++ compiler resources in the background while the student
+ *   reads the problem, thinks, and writes code.
+ * - Non-blocking: student can scroll, type, and edit code freely.
+ * - Pre-warms the virtual filesystem so subsequent student runs execute in sub-second time.
  */
-export async function getEmception() {
-    if (emceptionInstance) {
+export async function initCppEnvironment() {
+    if (emceptionInstance && runtimeStatus === "ready") {
         return emceptionInstance;
     }
 
@@ -73,10 +80,13 @@ export async function getEmception() {
         return emceptionInitPromise;
     }
 
+    setStatus("warming");
+    const initStartTime = Date.now();
+    console.log(`[CodeMedic Timing] 2. C++ initialization started at ${new Date(initStartTime).toISOString()}`);
+
     emceptionInitPromise = (async () => {
         let bootTimer = null;
         try {
-            setStatus("warming");
             console.log("[CodeMedic Executor] initializing environment");
             const bootPromise = createEmception({
                 tty: "none",
@@ -89,24 +99,53 @@ export async function getEmception() {
                 },
             });
 
-            // 25s safety guard for cold download of initial bundles
+            // 120s safety guard for cold download of initial bundles + headers
             const timeoutPromise = new Promise((_, reject) => {
                 bootTimer = setTimeout(() => {
                     reject(new Error("C++ execution environment failed to initialize: startup timed out."));
-                }, 25000);
+                }, 120000);
             });
 
             const instance = await Promise.race([bootPromise, timeoutPromise]);
+
+            // Pre-warm Clang & standard libraries in the background.
+            // This pulls clang.brdata and include.brdata into IndexedDB so user execution is instant!
+            console.log("[CodeMedic Executor] pre-warming Clang and standard libraries in background...");
+            const warmupExecId = "warmup_" + Math.random().toString(36).slice(2, 6);
+            const warmupSource = `#include <vector>\n#include <iostream>\nint main() { return 0; }\n`;
+            const warmupPaths = {
+                sourcePath: `/home/user/default/${warmupExecId}.cpp`,
+                objectPath: `${warmupExecId}.o`,
+                wasmPath: `${warmupExecId}.wasm`,
+            };
+
+            await compileAndRun(instance, {
+                toolchain: ToolchainPreset.CPP,
+                source: warmupSource,
+                cwd: "/home/user/default",
+                paths: warmupPaths,
+            });
+
+            // Clean up temporary warmup artifacts
+            try {
+                await instance.workspace.unlink(warmupPaths.sourcePath).catch(() => {});
+                await instance.workspace.unlink(`/home/user/default/${warmupPaths.objectPath}`).catch(() => {});
+                await instance.workspace.unlink(`/home/user/default/${warmupPaths.wasmPath}`).catch(() => {});
+            } catch (_) {}
+
             if (bootTimer) clearTimeout(bootTimer);
 
             emceptionInstance = instance;
+            const initDuration = Date.now() - initStartTime;
+            console.log(`[CodeMedic Timing] 3. C++ initialization completed in ${initDuration} ms at ${new Date().toISOString()}`);
             setStatus("ready");
             console.log("[CodeMedic Executor] environment ready");
             return instance;
         } catch (err) {
             if (bootTimer) clearTimeout(bootTimer);
-            console.error("[CodeMedic Executor] Failed to start Emception browser runtime:", err);
+            console.error("[CodeMedic Executor] Failed to initialize C++ environment:", err);
             terminateAndResetEmception();
+            setStatus("unavailable");
             throw err;
         } finally {
             emceptionInitPromise = null;
@@ -116,37 +155,28 @@ export async function getEmception() {
     return emceptionInitPromise;
 }
 
-/**
- * Ensures the C++ execution environment is booted and ready in the background.
- * Booting takes ~1 second. Does NOT block the worker with heavy compilation.
- */
+export async function getEmception() {
+    return initCppEnvironment();
+}
+
 export async function preloadCppExecutor() {
-    if (emceptionInstance && runtimeStatus === "ready") {
-        return emceptionInstance;
-    }
-    try {
-        console.log("[CodeMedic Executor] initializing environment");
-        const em = await getEmception();
-        return em;
-    } catch (err) {
-        console.warn("[CodeMedic Executor] preload note:", err?.message || err);
-        return null;
-    }
+    return initCppEnvironment();
 }
 
 /**
  * Runs C++ code using Emception WASM in a Web Worker.
  * 
  * Performance & Timing Architecture:
+ * - Reuses the single background-initialized environment.
+ * - If initialization is currently in progress, awaits the existing Promise rather than recreating.
  * - Infrastructure initialization, WASM loading, compilation, and linking do NOT consume student time.
  * - The student execution watchdog timer (EXACTLY 5,000 ms) starts ONLY when the student's compiled
  *   binary enters the 'run' (wasi-run) phase.
- * - Compilation and linking are guarded by a 35-second infrastructure timeout to prevent infinite hangs.
  * - Healthy workers are kept warm and reused across runs.
  * - If student code loops infinitely and exceeds 5000 ms, the worker is terminated and reset cleanly.
  */
 export async function runCppCode(code, stdin = "") {
-    if (isExecuting) {
+    if (isExecuting || isRunQueued) {
         return {
             success: false,
             exitCode: -1,
@@ -159,19 +189,23 @@ export async function runCppCode(code, stdin = "") {
         };
     }
 
-    isExecuting = true;
-    const execId = Math.random().toString(36).slice(2, 8);
-    const paths = {
-        sourcePath: `/home/user/default/solution_${execId}.cpp`,
-        objectPath: `solution_${execId}.o`,
-        wasmPath: `solution_${execId}.wasm`,
-    };
+    const runClickTime = Date.now();
+    console.log(`[CodeMedic Timing] 4. Run Code clicked at ${new Date(runClickTime).toISOString()}`);
 
+    isRunQueued = true;
     let em = null;
     try {
-        em = await getEmception();
+        // If background initialization is still running, await the existing Promise
+        if (emceptionInitPromise) {
+            console.log("[CodeMedic Executor] Run Code awaiting ongoing background C++ initialization...");
+            em = await emceptionInitPromise;
+        } else if (emceptionInstance && runtimeStatus === "ready") {
+            em = emceptionInstance;
+        } else {
+            em = await initCppEnvironment();
+        }
     } catch (bootErr) {
-        isExecuting = false;
+        isRunQueued = false;
         return {
             success: false,
             exitCode: -1,
@@ -182,7 +216,17 @@ export async function runCppCode(code, stdin = "") {
             browserUnavailable: true,
             isInfrastructureError: true,
         };
+    } finally {
+        isRunQueued = false;
     }
+
+    isExecuting = true;
+    const execId = Math.random().toString(36).slice(2, 8);
+    const paths = {
+        sourcePath: `/home/user/default/solution_${execId}.cpp`,
+        objectPath: `solution_${execId}.o`,
+        wasmPath: `solution_${execId}.wasm`,
+    };
 
     let stdoutBuf = "";
     let stderrBuf = "";
@@ -193,6 +237,8 @@ export async function runCppCode(code, stdin = "") {
     let isCompileTimeout = false;
     let currentPhase = "init";
     let studentStarted = false;
+    let compileStartTime = 0;
+    let studentExecStartTime = 0;
     const isHarnessCode = code.includes("__CODEMEDIC_OUTPUT_START__");
 
     try {
@@ -224,6 +270,8 @@ export async function runCppCode(code, stdin = "") {
                 // only when the program has loaded and entered main()!
                 if (isHarnessCode && !studentStarted && stdoutBuf.includes("__CODEMEDIC_OUTPUT_START__")) {
                     studentStarted = true;
+                    studentExecStartTime = Date.now();
+                    console.log(`[CodeMedic Timing] 7. student execution started at ${new Date(studentExecStartTime).toISOString()}`);
                     if (runStartupWatchdog) {
                         clearTimeout(runStartupWatchdog);
                         runStartupWatchdog = null;
@@ -244,15 +292,22 @@ export async function runCppCode(code, stdin = "") {
                 console.log(`[CodeMedic Execution Phase: ${phase}]`);
 
                 if (phase === "compile") {
+                    compileStartTime = Date.now();
+                    console.log(`[CodeMedic Timing] 5. compilation started at ${new Date(compileStartTime).toISOString()}`);
                     console.log("[CodeMedic Executor] compile started");
                 } else if (phase === "link") {
+                    const compileDuration = compileStartTime > 0 ? (Date.now() - compileStartTime) : 0;
+                    console.log(`[CodeMedic Timing] 6. compilation completed in ${compileDuration} ms at ${new Date().toISOString()}`);
                     console.log("[CodeMedic Executor] compile completed");
                 } else if (phase === "run") {
                     if (compileWatchdog) {
                         clearTimeout(compileWatchdog);
                         compileWatchdog = null;
                     }
-
+                    if (!studentStarted) {
+                        studentExecStartTime = Date.now();
+                        console.log(`[CodeMedic Timing] 7. student execution started at ${new Date(studentExecStartTime).toISOString()}`);
+                    }
                     console.log("[CodeMedic Executor] student execution started");
 
                     // 5-second student code watchdog (+500ms WASI startup grace)
@@ -270,6 +325,9 @@ export async function runCppCode(code, stdin = "") {
         if (compileWatchdog) clearTimeout(compileWatchdog);
         if (runStartupWatchdog) clearTimeout(runStartupWatchdog);
         if (studentWatchdog) clearTimeout(studentWatchdog);
+
+        const studentDuration = studentExecStartTime > 0 ? (Date.now() - studentExecStartTime) : (pipelineResult?.run?.durationMs || 0);
+        console.log(`[CodeMedic Timing] 8. student execution completed in ${studentDuration} ms at ${new Date().toISOString()}`);
         console.log("[CodeMedic Executor] execution completed");
 
         // Check if student execution timed out
@@ -363,6 +421,13 @@ export async function runCppCode(code, stdin = "") {
         isExecuting = false;
         if (compileWatchdog) clearTimeout(compileWatchdog);
         if (studentWatchdog) clearTimeout(studentWatchdog);
+        if (em && em.workspace) {
+            try {
+                await em.workspace.unlink(paths.sourcePath).catch(() => {});
+                await em.workspace.unlink(`/home/user/default/${paths.objectPath}`).catch(() => {});
+                await em.workspace.unlink(`/home/user/default/${paths.wasmPath}`).catch(() => {});
+            } catch (_) {}
+        }
     }
 }
 

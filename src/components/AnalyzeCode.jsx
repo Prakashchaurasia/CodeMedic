@@ -33,7 +33,10 @@ function AnalyzeCode({ problem, setPage, userId }) {
     const [cppRuntimeStatus, setCppRuntimeStatus] = useState(getRuntimeStatus());
 
     useEffect(() => {
-        preloadCppExecutor();
+        console.log("[CodeMedic Timing] 1. AnalyzeCode opened at", new Date().toISOString());
+        if (selectedLanguage === "cpp") {
+            preloadCppExecutor();
+        }
         return subscribeRuntimeStatus((status) => {
             setCppRuntimeStatus(status);
         });
@@ -121,6 +124,9 @@ function AnalyzeCode({ problem, setPage, userId }) {
 
     function handleLanguageChange(newLangId) {
         setSelectedLanguage(newLangId);
+        if (newLangId === "cpp") {
+            preloadCppExecutor();
+        }
         const nextLang = getLanguageConfig(newLangId);
         if (problem) {
             const key = getDraftKey(userId, problem.id, newLangId);
@@ -969,7 +975,7 @@ function AnalyzeCode({ problem, setPage, userId }) {
                                 ))}
                             </select>
                             {selectedLanguage === "cpp" ? (
-                                cppRuntimeStatus === "warming" ? (
+                                (cppRuntimeStatus === "warming" || cppRuntimeStatus === "initializing") ? (
                                     <span
                                         style={{
                                             display: "inline-flex",
@@ -1007,7 +1013,27 @@ function AnalyzeCode({ problem, setPage, userId }) {
                                         title="C++ environment is warmed and ready for sub-second execution"
                                     >
                                         <span style={{ display: "inline-block", width: "6px", height: "6px", borderRadius: "50%", background: "#4ade80" }} />
-                                        C++ environment ready
+                                        🟢 C++ environment ready
+                                    </span>
+                                ) : cppRuntimeStatus === "unavailable" ? (
+                                    <span
+                                        style={{
+                                            display: "inline-flex",
+                                            alignItems: "center",
+                                            gap: "6px",
+                                            background: "rgba(239, 68, 68, 0.12)",
+                                            color: "#f87171",
+                                            border: "1px solid rgba(239, 68, 68, 0.3)",
+                                            padding: "3px 8px",
+                                            borderRadius: "4px",
+                                            fontSize: "10px",
+                                            fontWeight: "700",
+                                            letterSpacing: "0.5px"
+                                        }}
+                                        title="C++ execution environment is currently unavailable"
+                                    >
+                                        <span style={{ display: "inline-block", width: "6px", height: "6px", borderRadius: "50%", background: "#f87171" }} />
+                                        C++ environment unavailable
                                     </span>
                                 ) : (
                                     <span
@@ -1096,7 +1122,7 @@ function AnalyzeCode({ problem, setPage, userId }) {
                         >
                             {isExecuting
                                 ? (selectedLanguage === "cpp" ? "Compiling & Running..." : "Running...")
-                                : (selectedLanguage === "cpp" && cppRuntimeStatus === "warming")
+                                : (selectedLanguage === "cpp" && (cppRuntimeStatus === "warming" || cppRuntimeStatus === "initializing"))
                                     ? "⏳ Preparing C++ environment..."
                                     : "▶ Run Code"}
                         </button>
