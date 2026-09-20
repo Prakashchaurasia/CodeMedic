@@ -126,6 +126,10 @@ function InnerCodeEditor({
     const handleEditorDidMount = (editor, monacoInstance) => {
         editorRef.current = editor;
         monacoRef.current = monacoInstance;
+        if (typeof window !== "undefined") {
+            window.__monacoEditor = editor;
+            window.__monaco = monacoInstance;
+        }
 
         try {
             // Define a sleek CodeMedic dark theme matching the platform's visual identity
