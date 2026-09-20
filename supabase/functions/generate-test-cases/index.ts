@@ -1,6 +1,47 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const GEMINI_MODEL = "gemini-3-flash-preview";
+const GEMINI_MODELS = [
+    "gemini-flash-latest",
+    "gemini-3.8-flash",
+    "gemini-3.5-flash",
+    "gemini-flash-lite-latest",
+    "gemini-3.1-flash-lite",
+    "gemini-3.6-flash"
+];
+
+const CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Content-Type": "application/json"
+};
+
+function jsonError(status: number, message: string, code: string, details?: any) {
+    return Response.json(
+        {
+            success: false,
+            error: message,
+            code,
+            ...(details ? { details } : {})
+        },
+        {
+            status,
+            headers: CORS_HEADERS
+        }
+    );
+}
+
+function cleanAndParseJson(raw: string) {
+    if (!raw || typeof raw !== "string") {
+        throw new Error("Received empty or invalid text from AI model.");
+    }
+    let text = raw.trim();
+    if (text.startsWith("```")) {
+        text = text.replace(/^```(?:json)?\s*/i, "");
+        text = text.replace(/\s*```$/, "");
+    }
+    return JSON.parse(text.trim());
+}
 
 export default {
     async fetch(req: Request) {
@@ -52,72 +93,22 @@ export default {
             const authHeader =
                 req.headers.get("Authorization");
 
-
             if (!authHeader) {
-
-                console.error(
-                    "Authorization header is missing."
-                );
-
-                return Response.json(
-                    {
-                        success: false,
-                        error:
-                            "Authorization header is missing."
-                    },
-                    {
-                        status: 401,
-                        headers: {
-                            "Access-Control-Allow-Origin": "*"
-                        }
-                    }
-                );
+                console.error("Authorization header is missing.");
+                return jsonError(401, "Authorization header is missing.", "AUTH_ERROR");
             }
-
 
             if (!authHeader.startsWith("Bearer ")) {
-
-                console.error(
-                    "Invalid Authorization header."
-                );
-
-                return Response.json(
-                    {
-                        success: false,
-                        error:
-                            "Invalid Authorization header."
-                    },
-                    {
-                        status: 401,
-                        headers: {
-                            "Access-Control-Allow-Origin": "*"
-                        }
-                    }
-                );
+                console.error("Invalid Authorization header.");
+                return jsonError(401, "Invalid Authorization header format.", "AUTH_ERROR");
             }
-
 
             const accessToken =
                 authHeader.substring(7).trim();
 
-
             if (!accessToken) {
-
-                return Response.json(
-                    {
-                        success: false,
-                        error:
-                            "Access token is missing."
-                    },
-                    {
-                        status: 401,
-                        headers: {
-                            "Access-Control-Allow-Origin": "*"
-                        }
-                    }
-                );
+                return jsonError(401, "Access token is missing.", "AUTH_ERROR");
             }
-
 
             /*
              * Verify the logged-in user.
@@ -133,43 +124,23 @@ export default {
                     accessToken
                 );
 
-
             if (userError || !user) {
-
-                console.error(
-                    "User authentication failed:",
-                    userError
-                );
-
-                return Response.json(
-                    {
-                        success: false,
-                        error:
-                            "Invalid or expired authentication token."
-                    },
-                    {
-                        status: 401,
-                        headers: {
-                            "Access-Control-Allow-Origin": "*"
-                        }
-                    }
+                console.error("User authentication failed:", userError);
+                return jsonError(
+                    401,
+                    "Invalid or expired authentication token.",
+                    "AUTH_ERROR",
+                    userError?.message || userError
                 );
             }
 
-
-            /*
-             * This is the real auth.users UUID.
-             */
-
             const userId =
                 user.id;
-
 
             console.log(
                 "Authenticated user:",
                 userId
             );
-
 
             /*
              * ----------------------------------------------------
@@ -180,25 +151,12 @@ export default {
             const geminiApiKey =
                 Deno.env.get("GEMINI_API_KEY");
 
-
             if (!geminiApiKey) {
-
-                console.error(
-                    "GEMINI_API_KEY is missing."
-                );
-
-                return Response.json(
-                    {
-                        success: false,
-                        error:
-                            "GEMINI_API_KEY is not configured."
-                    },
-                    {
-                        status: 500,
-                        headers: {
-                            "Access-Control-Allow-Origin": "*"
-                        }
-                    }
+                console.error("GEMINI_API_KEY is missing.");
+                return jsonError(
+                    500,
+                    "GEMINI_API_KEY is not configured in server environment.",
+                    "CONFIG_ERROR"
                 );
             }
 
@@ -290,27 +248,18 @@ export default {
 
 
             if (problemError || !problem) {
-
                 console.error(
                     "Problem fetch error:",
                     problemError
                 );
 
-                return Response.json(
-                    {
-                        success: false,
-                        error:
-                            "Problem not found."
-                    },
-                    {
-                        status: 404,
-                        headers: {
-                            "Access-Control-Allow-Origin": "*"
-                        }
-                    }
+                return jsonError(
+                    404,
+                    "Problem not found in database.",
+                    "NOT_FOUND",
+                    problemError?.message || problemError
                 );
             }
-
 
             /*
              * ----------------------------------------------------
@@ -328,19 +277,10 @@ export default {
                 problem.is_generated === true &&
                 problem.generated_by !== userId
             ) {
-
-                return Response.json(
-                    {
-                        success: false,
-                        error:
-                            "You are not allowed to generate tests for this problem."
-                    },
-                    {
-                        status: 403,
-                        headers: {
-                            "Access-Control-Allow-Origin": "*"
-                        }
-                    }
+                return jsonError(
+                    403,
+                    "You are not allowed to generate tests for this problem.",
+                    "FORBIDDEN"
                 );
             }
 
@@ -473,157 +413,105 @@ There must be EXACTLY 55 objects inside testCases.
 
             /*
              * ----------------------------------------------------
-             * CALL GEMINI
+             * CALL GEMINI (WITH MODEL FALLBACK & SAFE RECOVERY)
              * ----------------------------------------------------
              */
 
-            const geminiResponse =
-                await fetch(
-                    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+            const requestPayload = {
+                contents: [
                     {
-                        method: "POST",
-
-                        headers: {
-                            "Content-Type":
-                                "application/json",
-
-                            "x-goog-api-key":
-                                geminiApiKey
-                        },
-
-                        body: JSON.stringify({
-
-                            contents: [
-                                {
-                                    role: "user",
-
-                                    parts: [
-                                        {
-                                            text: prompt
-                                        }
-                                    ]
-                                }
-                            ],
-
-                            generationConfig: {
-
-                                responseMimeType:
-                                    "application/json",
-
-                                responseSchema: {
-
+                        role: "user",
+                        parts: [
+                            {
+                                text: prompt
+                            }
+                        ]
+                    }
+                ],
+                generationConfig: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: "OBJECT",
+                        properties: {
+                            testCases: {
+                                type: "ARRAY",
+                                items: {
                                     type: "OBJECT",
-
                                     properties: {
-
-                                        testCases: {
-
-                                            type: "ARRAY",
-
-                                            items: {
-
-                                                type: "OBJECT",
-
-                                                properties: {
-
-                                                    input: {
-                                                        type: "STRING"
-                                                    },
-
-                                                    expectedOutput: {
-                                                        type: "STRING"
-                                                    }
-
-                                                },
-
-                                                required: [
-                                                    "input",
-                                                    "expectedOutput"
-                                                ]
-                                            }
+                                        input: {
+                                            type: "STRING"
+                                        },
+                                        expectedOutput: {
+                                            type: "STRING"
                                         }
                                     },
-
                                     required: [
-                                        "testCases"
+                                        "input",
+                                        "expectedOutput"
                                     ]
                                 }
                             }
-                        })
+                        },
+                        required: [
+                            "testCases"
+                        ]
                     }
-                );
+                }
+            };
 
+            let generatedText: string | null = null;
+            let usedModel: string = "";
+            let lastGeminiError: any = null;
 
-            /*
-             * ----------------------------------------------------
-             * CHECK GEMINI RESPONSE
-             * ----------------------------------------------------
-             */
-
-            if (!geminiResponse.ok) {
-
-                const errorText =
-                    await geminiResponse.text();
-
-                console.error(
-                    "Gemini test generation error:",
-                    errorText
-                );
-
-                return Response.json(
-                    {
-                        success: false,
-                        error:
-                            "Gemini test generation failed."
-                    },
-                    {
-                        status: 502,
-                        headers: {
-                            "Access-Control-Allow-Origin": "*"
+            for (const model of GEMINI_MODELS) {
+                try {
+                    console.log(`Calling Gemini for test cases with model: ${model}`);
+                    const geminiResponse = await fetch(
+                        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+                        {
+                            method: "POST",
+                            headers: {
+                                "Content-Type": "application/json",
+                                "x-goog-api-key": geminiApiKey
+                            },
+                            body: JSON.stringify(requestPayload)
                         }
+                    );
+
+                    if (!geminiResponse.ok) {
+                        const errorText = await geminiResponse.text();
+                        console.warn(`Gemini model ${model} test generation failed HTTP ${geminiResponse.status}: ${errorText}`);
+                        lastGeminiError = { status: geminiResponse.status, error: errorText, model };
+                        continue;
                     }
-                );
+
+                    const geminiData = await geminiResponse.json();
+                    const text = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text;
+                    if (text && typeof text === "string" && text.trim().length > 0) {
+                        generatedText = text;
+                        usedModel = model;
+                        break;
+                    } else {
+                        console.warn(`Gemini model ${model} returned empty content.`);
+                        lastGeminiError = { status: 200, error: "Empty candidate parts", model };
+                    }
+                } catch (fetchError: any) {
+                    console.warn(`Gemini model ${model} test generation request threw:`, fetchError);
+                    lastGeminiError = { status: 500, error: fetchError?.message || String(fetchError), model };
+                }
             }
-
-
-            /*
-             * ----------------------------------------------------
-             * READ GEMINI RESPONSE
-             * ----------------------------------------------------
-             */
-
-            const geminiData =
-                await geminiResponse.json();
-
-
-            const generatedText =
-                geminiData
-                    ?.candidates?.[0]
-                    ?.content?.parts?.[0]
-                    ?.text;
-
 
             if (!generatedText) {
-
-                console.error(
-                    "Gemini returned empty test data."
-                );
-
-                return Response.json(
-                    {
-                        success: false,
-                        error:
-                            "Gemini returned an empty response."
-                    },
-                    {
-                        status: 502,
-                        headers: {
-                            "Access-Control-Allow-Origin": "*"
-                        }
-                    }
+                console.error("All Gemini models failed for test generation:", lastGeminiError);
+                return jsonError(
+                    502,
+                    `Gemini test generation failed (${lastGeminiError?.model || "API"}): ${lastGeminiError?.error || "Unknown error"}`,
+                    "GEMINI_API_ERROR",
+                    lastGeminiError
                 );
             }
 
+            console.log(`Gemini test cases generation succeeded using model: ${usedModel}`);
 
             /*
              * ----------------------------------------------------
@@ -632,34 +520,17 @@ There must be EXACTLY 55 objects inside testCases.
              */
 
             let generatedTests;
-
             try {
-
-                generatedTests =
-                    JSON.parse(generatedText);
-
-            } catch (error) {
-
-                console.error(
-                    "Test case JSON parsing error:",
-                    generatedText
-                );
-
-                return Response.json(
-                    {
-                        success: false,
-                        error:
-                            "Gemini returned invalid test-case JSON."
-                    },
-                    {
-                        status: 502,
-                        headers: {
-                            "Access-Control-Allow-Origin": "*"
-                        }
-                    }
+                generatedTests = cleanAndParseJson(generatedText);
+            } catch (error: any) {
+                console.error("Test case JSON parsing error:", error, generatedText);
+                return jsonError(
+                    502,
+                    `Gemini returned invalid test-case JSON: ${error?.message || "Syntax error"}`,
+                    "GEMINI_PARSE_ERROR",
+                    { rawSnippet: generatedText.slice(0, 300) }
                 );
             }
-
 
             /*
              * ----------------------------------------------------
@@ -667,28 +538,13 @@ There must be EXACTLY 55 objects inside testCases.
              * ----------------------------------------------------
              */
 
-            if (
-                !generatedTests.testCases ||
-                !Array.isArray(
-                    generatedTests.testCases
-                )
-            ) {
-
-                return Response.json(
-                    {
-                        success: false,
-                        error:
-                            "Invalid testCases format."
-                    },
-                    {
-                        status: 502,
-                        headers: {
-                            "Access-Control-Allow-Origin": "*"
-                        }
-                    }
+            if (!generatedTests.testCases || !Array.isArray(generatedTests.testCases)) {
+                return jsonError(
+                    502,
+                    "Invalid testCases format returned by AI.",
+                    "VALIDATION_ERROR"
                 );
             }
-
 
             /*
              * ----------------------------------------------------
@@ -696,30 +552,18 @@ There must be EXACTLY 55 objects inside testCases.
              * ----------------------------------------------------
              */
 
-            if (
-                generatedTests.testCases.length !== 55
-            ) {
-
+            if (generatedTests.testCases.length !== 55) {
                 console.error(
                     "Incorrect test count:",
                     generatedTests.testCases.length
                 );
 
-                return Response.json(
-                    {
-                        success: false,
-                        error:
-                            `Expected 55 test cases but received ${generatedTests.testCases.length}.`
-                    },
-                    {
-                        status: 502,
-                        headers: {
-                            "Access-Control-Allow-Origin": "*"
-                        }
-                    }
+                return jsonError(
+                    502,
+                    `Expected 55 test cases but received ${generatedTests.testCases.length}.`,
+                    "VALIDATION_ERROR"
                 );
             }
-
 
             /*
              * ----------------------------------------------------
@@ -727,33 +571,16 @@ There must be EXACTLY 55 objects inside testCases.
              * ----------------------------------------------------
              */
 
-            for (
-                const testCase
-                of generatedTests.testCases
-            ) {
-
+            for (const testCase of generatedTests.testCases) {
                 if (
                     typeof testCase.input !== "string" ||
                     typeof testCase.expectedOutput !== "string"
                 ) {
-
-                    console.error(
-                        "Invalid test case:",
-                        testCase
-                    );
-
-                    return Response.json(
-                        {
-                            success: false,
-                            error:
-                                "One or more generated test cases have invalid fields."
-                        },
-                        {
-                            status: 502,
-                            headers: {
-                                "Access-Control-Allow-Origin": "*"
-                            }
-                        }
+                    console.error("Invalid test case:", testCase);
+                    return jsonError(
+                        502,
+                        "One or more generated test cases have invalid fields.",
+                        "VALIDATION_ERROR"
                     );
                 }
             }
@@ -841,27 +668,18 @@ There must be EXACTLY 55 objects inside testCases.
 
 
             if (insertError) {
-
                 console.error(
                     "Test case save error:",
                     insertError
                 );
 
-                return Response.json(
-                    {
-                        success: false,
-                        error:
-                            `Failed to save test cases: ${insertError.message}`
-                    },
-                    {
-                        status: 500,
-                        headers: {
-                            "Access-Control-Allow-Origin": "*"
-                        }
-                    }
+                return jsonError(
+                    500,
+                    `Failed to save test cases: ${insertError.message}`,
+                    "DB_ERROR",
+                    insertError
                 );
             }
-
 
             /*
              * ----------------------------------------------------
@@ -873,58 +691,30 @@ There must be EXACTLY 55 objects inside testCases.
                 `Successfully saved 55 hidden tests for problem ${problemId}`
             );
 
-
             return Response.json(
                 {
                     success: true,
-
-                    problemId:
-                        problemId,
-
-                    testCount:
-                        55
+                    problemId: problemId,
+                    testCount: 55
                 },
                 {
                     status: 200,
-
-                    headers: {
-                        "Access-Control-Allow-Origin": "*",
-                        "Content-Type":
-                            "application/json"
-                    }
+                    headers: CORS_HEADERS
                 }
             );
 
-
-        } catch (error) {
-
-            /*
-             * ----------------------------------------------------
-             * GLOBAL ERROR
-             * ----------------------------------------------------
-             */
-
+        } catch (error: any) {
             console.error(
                 "Generate test cases error:",
                 error
             );
 
-            return Response.json(
-                {
-                    success: false,
-
-                    error:
-                        error instanceof Error
-                            ? error.message
-                            : "Unknown error."
-                },
-                {
-                    status: 500,
-
-                    headers: {
-                        "Access-Control-Allow-Origin": "*"
-                    }
-                }
+            return jsonError(
+                500,
+                error instanceof Error
+                    ? error.message
+                    : "Unknown error.",
+                "SERVER_ERROR"
             );
         }
     }

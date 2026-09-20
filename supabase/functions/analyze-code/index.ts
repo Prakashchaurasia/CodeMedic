@@ -1,59 +1,113 @@
 import "@supabase/functions-js/edge-runtime.d.ts";
-import { withSupabase } from "@supabase/server";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const GEMINI_MODEL = "gemini-3-flash-preview";
+const GEMINI_MODELS = [
+  "gemini-flash-latest",
+  "gemini-3.8-flash",
+  "gemini-3.5-flash",
+  "gemini-flash-lite-latest",
+  "gemini-3.1-flash-lite",
+  "gemini-3.6-flash"
+];
+
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Content-Type": "application/json"
+};
+
+function jsonError(status: number, message: string, code: string, details?: any) {
+  return Response.json(
+    {
+      success: false,
+      error: message,
+      code,
+      ...(details ? { details } : {})
+    },
+    {
+      status,
+      headers: CORS_HEADERS
+    }
+  );
+}
+
+function cleanAndParseJson(raw: string) {
+  if (!raw || typeof raw !== "string") {
+    throw new Error("Received empty or invalid text from AI model.");
+  }
+  let text = raw.trim();
+  if (text.startsWith("```")) {
+    text = text.replace(/^```(?:json)?\s*/i, "");
+    text = text.replace(/\s*```$/, "");
+  }
+  return JSON.parse(text.trim());
+}
 
 export default {
-  fetch: withSupabase(
-    { auth: "user" },
-    async (req, ctx) => {
-      try {
-        // Handle browser preflight request
-        if (req.method === "OPTIONS") {
-          return new Response("ok");
+  async fetch(req: Request) {
+    try {
+      // Handle browser preflight request
+      if (req.method === "OPTIONS") {
+        return new Response("ok", {
+          headers: CORS_HEADERS
+        });
+      }
+
+      // Supabase Admin Client
+      const supabaseAdmin = createClient(
+        Deno.env.get("SUPABASE_URL")!,
+        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+      );
+
+      // Authentication verification
+      let userId: string | null = null;
+      const authHeader = req.headers.get("Authorization");
+      if (authHeader && authHeader.startsWith("Bearer ")) {
+        const accessToken = authHeader.substring(7).trim();
+        if (accessToken) {
+          const { data: { user } } = await supabaseAdmin.auth.getUser(accessToken);
+          if (user) {
+            userId = user.id;
+          }
         }
+      }
 
-        // Get Gemini API key from Supabase secrets
-        const geminiApiKey =
-          Deno.env.get("GEMINI_API_KEY");
+      // Get Gemini API key from Supabase secrets
+      const geminiApiKey = Deno.env.get("GEMINI_API_KEY");
+      if (!geminiApiKey) {
+        console.error("GEMINI_API_KEY is missing.");
+        return jsonError(
+          500,
+          "GEMINI_API_KEY is not configured in server environment.",
+          "CONFIG_ERROR"
+        );
+      }
 
-        if (!geminiApiKey) {
-          return Response.json(
-            {
-              error:
-                "GEMINI_API_KEY is not configured.",
-            },
-            { status: 500 }
-          );
-        }
+      // Read request body
+      const body = await req.json();
+      const {
+        problem,
+        thinking,
+        code,
+        language,
+        basicAnalysis,
+        executionResult
+      } = body;
 
-        // Read request body
-        const body = await req.json();
+      // Validate required information
+      if (!problem || !code || !language) {
+        return jsonError(
+          400,
+          "Problem, code, and language are required fields.",
+          "VALIDATION_ERROR"
+        );
+      }
 
-        const {
-          problem,
-          thinking,
-          code,
-          language,
-          basicAnalysis,
-          executionResult,
-        } = body;
-
-        // Validate required information
-        if (!problem || !code || !language) {
-          return Response.json(
-            {
-              error:
-                "Problem, code, and language are required.",
-            },
-            { status: 400 }
-          );
-        }
-
-        /*
-         * CodeMedic AI diagnosis prompt
-         */
-        const prompt = `
+      /*
+       * CodeMedic AI diagnosis prompt
+       */
+      const prompt = `
 You are CodeMedic, an AI DSA learning mentor.
 
 Your job is to diagnose how a student thinks about a DSA problem
@@ -105,215 +159,149 @@ ${JSON.stringify(basicAnalysis, null, 2)}
 Analyze the student and return the requested JSON structure.
 `;
 
-        /*
-         * Call Gemini
-         */
-        const geminiResponse = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+      const requestPayload = {
+        contents: [
           {
-            method: "POST",
-
-            headers: {
-              "Content-Type": "application/json",
-              "x-goog-api-key": geminiApiKey,
-            },
-
-            body: JSON.stringify({
-              contents: [
-                {
-                  role: "user",
-                  parts: [
-                    {
-                      text: prompt,
-                    },
-                  ],
-                },
-              ],
-
-              generationConfig: {
-                responseMimeType:
-                  "application/json",
-
-                responseSchema: {
-                  type: "OBJECT",
-
-                  properties: {
-                    correctness: {
-                      type: "STRING",
-                    },
-
-                    approach: {
-                      type: "STRING",
-                    },
-
-                    brute_force: {
-                      type: "BOOLEAN",
-                    },
-
-                    time_complexity: {
-                      type: "STRING",
-                    },
-
-                    space_complexity: {
-                      type: "STRING",
-                    },
-
-                    actual_data_structures: {
-                      type: "ARRAY",
-                      items: {
-                        type: "STRING",
-                      },
-                    },
-
-                    actual_patterns: {
-                      type: "ARRAY",
-                      items: {
-                        type: "STRING",
-                      },
-                    },
-
-                    weakness: {
-                      type: "STRING",
-                    },
-
-                    thinking_observation: {
-                      type: "STRING",
-                    },
-
-                    explanation: {
-                      type: "STRING",
-                    },
-
-                    optimization: {
-                      type: "STRING",
-                    },
-
-                    hints: {
-                      type: "ARRAY",
-                      items: {
-                        type: "STRING",
-                      },
-                    },
-
-                    reference_solution: {
-                      type: "STRING",
-                    },
-                  },
-
-                  required: [
-                    "correctness",
-                    "approach",
-                    "brute_force",
-                    "time_complexity",
-                    "space_complexity",
-                    "actual_data_structures",
-                    "actual_patterns",
-                    "weakness",
-                    "thinking_observation",
-                    "explanation",
-                    "optimization",
-                    "hints",
-                    "reference_solution",
-                  ],
-                },
-              },
-            }),
+            role: "user",
+            parts: [
+              {
+                text: prompt
+              }
+            ]
           }
-        );
-
-        /*
-         * Handle Gemini API errors
-         */
-        if (!geminiResponse.ok) {
-          const errorText =
-            await geminiResponse.text();
-
-          console.error(
-            "Gemini API error:",
-            errorText
-          );
-
-          return Response.json(
-            {
-              error:
-                "Gemini API request failed.",
-              details: errorText,
+        ],
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: "OBJECT",
+            properties: {
+              correctness: { type: "STRING" },
+              approach: { type: "STRING" },
+              brute_force: { type: "BOOLEAN" },
+              time_complexity: { type: "STRING" },
+              space_complexity: { type: "STRING" },
+              actual_data_structures: {
+                type: "ARRAY",
+                items: { type: "STRING" }
+              },
+              actual_patterns: {
+                type: "ARRAY",
+                items: { type: "STRING" }
+              },
+              weakness: { type: "STRING" },
+              thinking_observation: { type: "STRING" },
+              explanation: { type: "STRING" },
+              optimization: { type: "STRING" },
+              hints: {
+                type: "ARRAY",
+                items: { type: "STRING" }
+              },
+              reference_solution: { type: "STRING" }
             },
-            { status: 502 }
-          );
+            required: [
+              "correctness",
+              "approach",
+              "brute_force",
+              "time_complexity",
+              "space_complexity",
+              "actual_data_structures",
+              "actual_patterns",
+              "weakness",
+              "thinking_observation",
+              "explanation",
+              "optimization",
+              "hints",
+              "reference_solution"
+            ]
+          }
         }
+      };
 
-        /*
-         * Read Gemini response
-         */
-        const geminiData =
-          await geminiResponse.json();
+      let generatedText: string | null = null;
+      let usedModel: string = "";
+      let lastGeminiError: any = null;
 
-        const generatedText =
-          geminiData
-            ?.candidates?.[0]
-            ?.content?.parts?.[0]
-            ?.text;
-
-        if (!generatedText) {
-          return Response.json(
-            {
-              error:
-                "Gemini returned an empty response.",
-            },
-            { status: 502 }
-          );
-        }
-
-        /*
-         * Convert Gemini JSON string
-         * into a JavaScript object
-         */
-        let diagnosis;
-
+      for (const model of GEMINI_MODELS) {
         try {
-          diagnosis =
-            JSON.parse(generatedText);
-        } catch (error) {
-          console.error(
-            "Gemini JSON parsing error:",
-            generatedText
-          );
-
-          return Response.json(
+          console.log(`Calling Gemini for code analysis with model: ${model}`);
+          const geminiResponse = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
             {
-              error:
-                "Gemini returned invalid JSON.",
-            },
-            { status: 502 }
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "x-goog-api-key": geminiApiKey
+              },
+              body: JSON.stringify(requestPayload)
+            }
           );
+
+          if (!geminiResponse.ok) {
+            const errorText = await geminiResponse.text();
+            console.warn(`Gemini model ${model} code analysis failed HTTP ${geminiResponse.status}: ${errorText}`);
+            lastGeminiError = { status: geminiResponse.status, error: errorText, model };
+            continue;
+          }
+
+          const geminiData = await geminiResponse.json();
+          const text = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (text && typeof text === "string" && text.trim().length > 0) {
+            generatedText = text;
+            usedModel = model;
+            break;
+          } else {
+            console.warn(`Gemini model ${model} returned empty content.`);
+            lastGeminiError = { status: 200, error: "Empty candidate parts", model };
+          }
+        } catch (fetchErr: any) {
+          console.warn(`Gemini model ${model} code analysis request threw:`, fetchErr);
+          lastGeminiError = { status: 500, error: fetchErr?.message || String(fetchErr), model };
         }
+      }
 
-        /*
-         * Return diagnosis to React
-         */
-        return Response.json({
-          success: true,
-          diagnosis,
-          userId: ctx.userClaims?.sub ?? null,
-        });
-      } catch (error) {
-        console.error(
-          "Analyze-code function error:",
-          error
-        );
-
-        return Response.json(
-          {
-            success: false,
-            error:
-              error instanceof Error
-                ? error.message
-                : "Unknown server error.",
-          },
-          { status: 500 }
+      if (!generatedText) {
+        console.error("All Gemini models failed for code analysis:", lastGeminiError);
+        return jsonError(
+          502,
+          `Gemini code analysis failed (${lastGeminiError?.model || "API"}): ${lastGeminiError?.error || "Unknown error"}`,
+          "GEMINI_API_ERROR",
+          lastGeminiError
         );
       }
+
+      console.log(`Gemini code analysis succeeded using model: ${usedModel}`);
+
+      let diagnosis;
+      try {
+        diagnosis = cleanAndParseJson(generatedText);
+      } catch (error: any) {
+        console.error("Gemini JSON parsing error in analyze-code:", error, generatedText);
+        return jsonError(
+          502,
+          `Gemini returned invalid analysis JSON: ${error?.message || "Syntax error"}`,
+          "GEMINI_PARSE_ERROR",
+          { rawSnippet: generatedText.slice(0, 300) }
+        );
+      }
+
+      return Response.json(
+        {
+          success: true,
+          diagnosis,
+          userId
+        },
+        {
+          status: 200,
+          headers: CORS_HEADERS
+        }
+      );
+    } catch (error: any) {
+      console.error("Analyze-code function error:", error);
+      return jsonError(
+        500,
+        error instanceof Error ? error.message : "Unknown server error.",
+        "SERVER_ERROR"
+      );
     }
-  ),
+  }
 };

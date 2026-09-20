@@ -141,33 +141,42 @@ function GeneratePractice({ onStartCoding }) {
          */
 
         if (functionError) {
-
             console.error(
                 "Problem generation error:",
                 functionError
             );
 
-            setError(
-                functionError.message ||
-                "Unable to generate problem. Please try again."
-            );
+            let detailedMessage = "Unable to generate problem. Please try again.";
+            if (functionError.context && typeof functionError.context.json === "function") {
+                try {
+                    const errPayload = await functionError.context.json();
+                    if (errPayload?.error) {
+                        detailedMessage = errPayload.error;
+                    }
+                } catch (_) {
+                    try {
+                        const rawText = await functionError.context.text();
+                        if (rawText) detailedMessage = rawText;
+                    } catch (_) {}
+                }
+            } else if (functionError.message) {
+                detailedMessage = functionError.message;
+            }
 
+            setError(`Generation failed: ${detailedMessage}`);
             setLoading(false);
             return;
         }
-
 
         console.log(
             "Generated problem received:",
             data
         );
 
-
         console.log(
             "Generated hints:",
             data?.problem?.hints
         );
-
 
         /*
          * ============================================================
@@ -177,12 +186,9 @@ function GeneratePractice({ onStartCoding }) {
          */
 
         if (!data?.success || !data?.problem) {
-
             setError(
-                data?.error ||
-                "Problem generation failed."
+                `Generation failed: ${data?.error || "Problem generation failed."}`
             );
-
             setLoading(false);
             return;
         }

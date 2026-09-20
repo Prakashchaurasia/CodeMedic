@@ -1,7 +1,48 @@
 import "@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const GEMINI_MODEL = "gemini-3-flash-preview";
+const GEMINI_MODELS = [
+    "gemini-flash-latest",
+    "gemini-3.8-flash",
+    "gemini-3.5-flash",
+    "gemini-flash-lite-latest",
+    "gemini-3.1-flash-lite",
+    "gemini-3.6-flash"
+];
+
+const CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Content-Type": "application/json"
+};
+
+function jsonError(status: number, message: string, code: string, details?: any) {
+    return Response.json(
+        {
+            success: false,
+            error: message,
+            code,
+            ...(details ? { details } : {})
+        },
+        {
+            status,
+            headers: CORS_HEADERS
+        }
+    );
+}
+
+function cleanAndParseJson(raw: string) {
+    if (!raw || typeof raw !== "string") {
+        throw new Error("Received empty or invalid text from AI model.");
+    }
+    let text = raw.trim();
+    if (text.startsWith("```")) {
+        text = text.replace(/^```(?:json)?\s*/i, "");
+        text = text.replace(/\s*```$/, "");
+    }
+    return JSON.parse(text.trim());
+}
 
 const SUPPORTED_CPP_TYPES = new Set([
     "int",
@@ -146,10 +187,11 @@ export default {
                         "Access-Control-Allow-Headers":
                             "authorization, x-client-info, apikey, content-type",
                         "Access-Control-Allow-Methods":
-                            "POST, OPTIONS"
+                            "POST, OPTIONS, GET"
                     }
                 });
             }
+
 
 
             /*
@@ -195,74 +237,22 @@ export default {
                 req.headers.get("Authorization");
 
             if (!authHeader) {
-
-                console.error(
-                    "Authorization header is missing."
-                );
-
-                return Response.json(
-                    {
-                        success: false,
-                        error:
-                            "Authorization header is missing."
-                    },
-                    {
-                        status: 401,
-                        headers: {
-                            "Access-Control-Allow-Origin": "*"
-                        }
-                    }
-                );
+                console.error("Authorization header is missing.");
+                return jsonError(401, "Authorization header is missing.", "AUTH_ERROR");
             }
-
 
             if (!authHeader.startsWith("Bearer ")) {
-
-                console.error(
-                    "Invalid Authorization header format."
-                );
-
-                return Response.json(
-                    {
-                        success: false,
-                        error:
-                            "Invalid Authorization header."
-                    },
-                    {
-                        status: 401,
-                        headers: {
-                            "Access-Control-Allow-Origin": "*"
-                        }
-                    }
-                );
+                console.error("Invalid Authorization header format.");
+                return jsonError(401, "Invalid Authorization header format.", "AUTH_ERROR");
             }
-
 
             const accessToken =
                 authHeader.substring(7).trim();
 
-
             if (!accessToken) {
-
-                console.error(
-                    "Access token is empty."
-                );
-
-                return Response.json(
-                    {
-                        success: false,
-                        error:
-                            "Access token is missing."
-                    },
-                    {
-                        status: 401,
-                        headers: {
-                            "Access-Control-Allow-Origin": "*"
-                        }
-                    }
-                );
+                console.error("Access token is empty.");
+                return jsonError(401, "Access token is missing.", "AUTH_ERROR");
             }
-
 
             /*
              * Ask Supabase Auth who owns this access token.
@@ -278,29 +268,15 @@ export default {
                     accessToken
                 );
 
-
             if (userError || !user) {
-
-                console.error(
-                    "User authentication failed:",
-                    userError
-                );
-
-                return Response.json(
-                    {
-                        success: false,
-                        error:
-                            "Invalid or expired authentication token."
-                    },
-                    {
-                        status: 401,
-                        headers: {
-                            "Access-Control-Allow-Origin": "*"
-                        }
-                    }
+                console.error("User authentication failed:", userError);
+                return jsonError(
+                    401,
+                    "Invalid or expired authentication token.",
+                    "AUTH_ERROR",
+                    userError?.message || userError
                 );
             }
-
 
             /*
              * This is the REAL auth.users UUID.
@@ -317,7 +293,6 @@ export default {
                 userId
             );
 
-
             /*
              * ----------------------------------------------------
              * GEMINI API KEY
@@ -327,25 +302,12 @@ export default {
             const geminiApiKey =
                 Deno.env.get("GEMINI_API_KEY");
 
-
             if (!geminiApiKey) {
-
-                console.error(
-                    "GEMINI_API_KEY is missing."
-                );
-
-                return Response.json(
-                    {
-                        success: false,
-                        error:
-                            "GEMINI_API_KEY is not configured."
-                    },
-                    {
-                        status: 500,
-                        headers: {
-                            "Access-Control-Allow-Origin": "*"
-                        }
-                    }
+                console.error("GEMINI_API_KEY is missing.");
+                return jsonError(
+                    500,
+                    "GEMINI_API_KEY is not configured in server environment.",
+                    "CONFIG_ERROR"
                 );
             }
 
@@ -375,19 +337,10 @@ export default {
              */
 
             if (!topic || !difficulty) {
-
-                return Response.json(
-                    {
-                        success: false,
-                        error:
-                            "Topic and difficulty are required."
-                    },
-                    {
-                        status: 400,
-                        headers: {
-                            "Access-Control-Allow-Origin": "*"
-                        }
-                    }
+                return jsonError(
+                    400,
+                    "Topic and difficulty are required parameters.",
+                    "VALIDATION_ERROR"
                 );
             }
 
@@ -558,268 +511,149 @@ Return this structure:
 
             /*
              * ----------------------------------------------------
-             * CALL GEMINI
+             * CALL GEMINI (WITH MODEL FALLBACK & SAFE RECOVERY)
              * ----------------------------------------------------
              */
 
-            const geminiResponse =
-                await fetch(
-                    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+            const requestPayload = {
+                contents: [
                     {
-                        method: "POST",
-
-                        headers: {
-                            "Content-Type":
-                                "application/json",
-
-                            "x-goog-api-key":
-                                geminiApiKey
-                        },
-
-                        body: JSON.stringify({
-
-                            contents: [
-                                {
-                                    role: "user",
-
-                                    parts: [
-                                        {
-                                            text: prompt
-                                        }
-                                    ]
-                                }
-                            ],
-
-                            generationConfig: {
-
-                                responseMimeType:
-                                    "application/json",
-
-                                responseSchema: {
-
-                                    type: "OBJECT",
-
-                                    properties: {
-
-                                        title: {
-                                            type: "STRING"
-                                        },
-
-                                        description: {
-                                            type: "STRING"
-                                        },
-
-                                        difficulty: {
-                                            type: "STRING"
-                                        },
-
-                                        topic: {
-                                            type: "STRING"
-                                        },
-
-                                        pattern: {
-                                            type: "STRING"
-                                        },
-
-                                        dataStructure: {
-                                            type: "STRING"
-                                        },
-
-                                        expectedTime: {
-                                            type: "STRING"
-                                        },
-
-                                        expectedSpace: {
-                                            type: "STRING"
-                                        },
-
-                                        constraints: {
-                                            type: "STRING"
-                                        },
-
-                                        inputFormat: {
-                                            type: "STRING"
-                                        },
-
-                                        outputFormat: {
-                                            type: "STRING"
-                                        },
-
-                                        functionSpec: {
+                        role: "user",
+                        parts: [
+                            {
+                                text: prompt
+                            }
+                        ]
+                    }
+                ],
+                generationConfig: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: "OBJECT",
+                        properties: {
+                            title: { type: "STRING" },
+                            description: { type: "STRING" },
+                            difficulty: { type: "STRING" },
+                            topic: { type: "STRING" },
+                            pattern: { type: "STRING" },
+                            dataStructure: { type: "STRING" },
+                            expectedTime: { type: "STRING" },
+                            expectedSpace: { type: "STRING" },
+                            constraints: { type: "STRING" },
+                            inputFormat: { type: "STRING" },
+                            outputFormat: { type: "STRING" },
+                            functionSpec: {
+                                type: "OBJECT",
+                                properties: {
+                                    functionName: { type: "STRING" },
+                                    returnType: { type: "STRING" },
+                                    parameters: {
+                                        type: "ARRAY",
+                                        items: {
                                             type: "OBJECT",
                                             properties: {
-                                                functionName: {
-                                                    type: "STRING"
-                                                },
-                                                returnType: {
-                                                    type: "STRING"
-                                                },
-                                                parameters: {
-                                                    type: "ARRAY",
-                                                    items: {
-                                                        type: "OBJECT",
-                                                        properties: {
-                                                            name: {
-                                                                type: "STRING"
-                                                            },
-                                                            type: {
-                                                                type: "STRING"
-                                                            }
-                                                        },
-                                                        required: [
-                                                            "name",
-                                                            "type"
-                                                        ]
-                                                    }
-                                                }
+                                                name: { type: "STRING" },
+                                                type: { type: "STRING" }
                                             },
-                                            required: [
-                                                "functionName",
-                                                "returnType",
-                                                "parameters"
-                                            ]
-                                        },
-
-                                        examples: {
-
-                                            type: "ARRAY",
-
-                                            items: {
-
-                                                type: "OBJECT",
-
-                                                properties: {
-
-                                                    input: {
-                                                        type: "STRING"
-                                                    },
-
-                                                    output: {
-                                                        type: "STRING"
-                                                    },
-
-                                                    explanation: {
-                                                        type: "STRING"
-                                                    }
-
-                                                },
-
-                                                required: [
-                                                    "input",
-                                                    "output",
-                                                    "explanation"
-                                                ]
-                                            }
-                                        },
-
-                                        hints: {
-
-                                            type: "ARRAY",
-
-                                            items: {
-                                                type: "STRING"
-                                            }
-                                        },
-
-                                        learningObjective: {
-                                            type: "STRING"
+                                            required: ["name", "type"]
                                         }
+                                    }
+                                },
+                                required: ["functionName", "returnType", "parameters"]
+                            },
+                            examples: {
+                                type: "ARRAY",
+                                items: {
+                                    type: "OBJECT",
+                                    properties: {
+                                        input: { type: "STRING" },
+                                        output: { type: "STRING" },
+                                        explanation: { type: "STRING" }
                                     },
-
-                                    required: [
-                                        "title",
-                                        "description",
-                                        "difficulty",
-                                        "topic",
-                                        "pattern",
-                                        "dataStructure",
-                                        "expectedTime",
-                                        "expectedSpace",
-                                        "constraints",
-                                        "inputFormat",
-                                        "outputFormat",
-                                        "functionSpec",
-                                        "examples",
-                                        "hints",
-                                        "learningObjective"
-                                    ]
+                                    required: ["input", "output", "explanation"]
                                 }
-                            }
-                        })
+                            },
+                            hints: {
+                                type: "ARRAY",
+                                items: { type: "STRING" }
+                            },
+                            learningObjective: { type: "STRING" }
+                        },
+                        required: [
+                            "title",
+                            "description",
+                            "difficulty",
+                            "topic",
+                            "pattern",
+                            "dataStructure",
+                            "expectedTime",
+                            "expectedSpace",
+                            "constraints",
+                            "inputFormat",
+                            "outputFormat",
+                            "functionSpec",
+                            "examples",
+                            "hints",
+                            "learningObjective"
+                        ]
                     }
-                );
+                }
+            };
 
+            let generatedText: string | null = null;
+            let usedModel: string = "";
+            const modelAttemptErrors: any[] = [];
 
-            /*
-             * ----------------------------------------------------
-             * CHECK GEMINI RESPONSE
-             * ----------------------------------------------------
-             */
-
-            if (!geminiResponse.ok) {
-
-                const errorText =
-                    await geminiResponse.text();
-
-                console.error(
-                    "Gemini API error:",
-                    errorText
-                );
-
-                return Response.json(
-                    {
-                        success: false,
-                        error:
-                            "Gemini problem generation failed."
-                    },
-                    {
-                        status: 502,
-                        headers: {
-                            "Access-Control-Allow-Origin": "*"
+            for (const model of GEMINI_MODELS) {
+                try {
+                    console.log(`Calling Gemini with model: ${model}`);
+                    const geminiResponse = await fetch(
+                        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+                        {
+                            method: "POST",
+                            headers: {
+                                "Content-Type": "application/json",
+                                "x-goog-api-key": geminiApiKey
+                            },
+                            body: JSON.stringify(requestPayload)
                         }
+                    );
+
+                    if (!geminiResponse.ok) {
+                        const errorText = await geminiResponse.text();
+                        console.warn(`Gemini model ${model} failed with HTTP ${geminiResponse.status}: ${errorText}`);
+                        modelAttemptErrors.push({ model, status: geminiResponse.status, error: errorText });
+                        continue;
                     }
-                );
+
+                    const geminiData = await geminiResponse.json();
+                    const text = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text;
+                    if (text && typeof text === "string" && text.trim().length > 0) {
+                        generatedText = text;
+                        usedModel = model;
+                        break;
+                    } else {
+                        console.warn(`Gemini model ${model} returned empty content.`);
+                        modelAttemptErrors.push({ model, status: 200, error: "Empty candidate parts" });
+                    }
+                } catch (fetchError: any) {
+                    console.warn(`Gemini model ${model} request threw:`, fetchError);
+                    modelAttemptErrors.push({ model, status: 500, error: fetchError?.message || String(fetchError) });
+                }
             }
-
-
-            /*
-             * ----------------------------------------------------
-             * READ GEMINI JSON
-             * ----------------------------------------------------
-             */
-
-            const geminiData =
-                await geminiResponse.json();
-
-
-            const generatedText =
-                geminiData
-                    ?.candidates?.[0]
-                    ?.content?.parts?.[0]
-                    ?.text;
-
 
             if (!generatedText) {
-
-                console.error(
-                    "Gemini returned no text."
-                );
-
-                return Response.json(
-                    {
-                        success: false,
-                        error:
-                            "Gemini returned an empty response."
-                    },
-                    {
-                        status: 502,
-                        headers: {
-                            "Access-Control-Allow-Origin": "*"
-                        }
-                    }
+                console.error("All Gemini models failed for problem generation:", modelAttemptErrors);
+                const primaryError = modelAttemptErrors[0]?.error || "Unknown error";
+                return jsonError(
+                    502,
+                    `Gemini problem generation failed. ${modelAttemptErrors.map(e => `[${e.model}: HTTP ${e.status}]`).join(", ")}: ${primaryError}`,
+                    "GEMINI_API_ERROR",
+                    { modelAttemptErrors }
                 );
             }
 
+            console.log(`Gemini problem generation succeeded using model: ${usedModel}`);
 
             /*
              * ----------------------------------------------------
@@ -828,34 +662,17 @@ Return this structure:
              */
 
             let problem;
-
             try {
-
-                problem =
-                    JSON.parse(generatedText);
-
-            } catch (error) {
-
-                console.error(
-                    "Problem JSON parsing error:",
-                    generatedText
-                );
-
-                return Response.json(
-                    {
-                        success: false,
-                        error:
-                            "Gemini returned invalid JSON."
-                    },
-                    {
-                        status: 502,
-                        headers: {
-                            "Access-Control-Allow-Origin": "*"
-                        }
-                    }
+                problem = cleanAndParseJson(generatedText);
+            } catch (error: any) {
+                console.error("Problem JSON parsing error:", error, generatedText);
+                return jsonError(
+                    502,
+                    `Gemini returned invalid JSON: ${error?.message || "Syntax error"}`,
+                    "GEMINI_PARSE_ERROR",
+                    { rawSnippet: generatedText.slice(0, 300) }
                 );
             }
-
 
             /*
              * ----------------------------------------------------
@@ -872,17 +689,11 @@ Return this structure:
                     problem
                 );
 
-                return Response.json(
-                    {
-                        success: false,
-                        error: `Gemini generated an invalid problem contract: ${validation.error}`
-                    },
-                    {
-                        status: 502,
-                        headers: {
-                            "Access-Control-Allow-Origin": "*"
-                        }
-                    }
+                return jsonError(
+                    502,
+                    `Gemini generated an invalid problem contract: ${validation.error}`,
+                    "VALIDATION_ERROR",
+                    { error: validation.error }
                 );
             }
 
@@ -975,27 +786,18 @@ Return this structure:
              */
 
             if (problemError) {
-
                 console.error(
                     "Problem save error:",
                     problemError
                 );
 
-                return Response.json(
-                    {
-                        success: false,
-                        error:
-                            "Failed to save generated problem."
-                    },
-                    {
-                        status: 500,
-                        headers: {
-                            "Access-Control-Allow-Origin": "*"
-                        }
-                    }
+                return jsonError(
+                    500,
+                    `Failed to save generated problem: ${problemError.message}`,
+                    "DB_ERROR",
+                    problemError
                 );
             }
-
 
             /*
              * ----------------------------------------------------
@@ -1008,58 +810,30 @@ Return this structure:
                 savedProblem.id
             );
 
-
             return Response.json(
                 {
                     success: true,
-
-                    problem:
-                        savedProblem,
-
-                    userId:
-                        userId
+                    problem: savedProblem,
+                    userId: userId
                 },
                 {
                     status: 200,
-
-                    headers: {
-                        "Access-Control-Allow-Origin": "*",
-                        "Content-Type":
-                            "application/json"
-                    }
+                    headers: CORS_HEADERS
                 }
             );
 
-
-        } catch (error) {
-
-            /*
-             * ----------------------------------------------------
-             * GLOBAL ERROR
-             * ----------------------------------------------------
-             */
-
+        } catch (error: any) {
             console.error(
                 "Generate problem error:",
                 error
             );
 
-            return Response.json(
-                {
-                    success: false,
-
-                    error:
-                        error instanceof Error
-                            ? error.message
-                            : "Unknown error."
-                },
-                {
-                    status: 500,
-
-                    headers: {
-                        "Access-Control-Allow-Origin": "*"
-                    }
-                }
+            return jsonError(
+                500,
+                error instanceof Error
+                    ? error.message
+                    : "Unknown server error.",
+                "SERVER_ERROR"
             );
         }
     }

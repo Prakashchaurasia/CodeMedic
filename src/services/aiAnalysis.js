@@ -65,11 +65,17 @@ export async function analyzeWithAI({
     );
 
     try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const headers = session?.access_token ? {
+            Authorization: `Bearer ${session.access_token}`
+        } : {};
+
         const { data, error } =
             await supabase.functions.invoke(
                 "analyze-code",
                 {
-                    body: analysisRequest
+                    body: analysisRequest,
+                    headers
                 }
             );
 
@@ -81,7 +87,14 @@ export async function analyzeWithAI({
             return data.diagnosis;
         }
 
-        console.warn("Edge function warning, using structured local analysis:", error || data?.error);
+        let edgeErrMsg = error?.message || data?.error;
+        if (error?.context && typeof error.context.json === "function") {
+            try {
+                const errJson = await error.context.json();
+                if (errJson?.error) edgeErrMsg = errJson.error;
+            } catch (_) {}
+        }
+        console.warn("Edge function warning, using structured local analysis:", edgeErrMsg);
     } catch (edgeErr) {
         console.warn("Edge function invocation failed, using structured local analysis:", edgeErr);
     }
