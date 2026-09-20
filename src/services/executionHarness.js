@@ -6,25 +6,54 @@
 /**
  * Standard C++ headers and definitions included in every harness.
  */
-const BASE_HARNESS_PREAMBLE = `
+const BASE_HARNESS_CORE = `
 #include <iostream>
 #include <vector>
 #include <string>
-#include <unordered_map>
-#include <unordered_set>
-#include <map>
-#include <set>
-#include <queue>
-#include <stack>
 #include <algorithm>
 #include <climits>
-#include <cmath>
 #include <chrono>
 #include <cctype>
+`;
 
+/**
+ * Dynamically resolves C++ headers needed for the solution and problem.
+ * Simple problems only parse the fast core headers, avoiding parsing 60k+ lines of unused templates.
+ */
+export function getHarnessPreamble(studentCode = "", problem = null) {
+    const code = studentCode || "";
+    const pStr = JSON.stringify(problem || {}).toLowerCase();
+    
+    let extra = "";
+    if (code.includes("unordered_map") || pStr.includes("hash table") || pStr.includes("map")) {
+        extra += "#include <unordered_map>\n";
+    }
+    if (code.includes("unordered_set") || pStr.includes("hash table") || pStr.includes("set")) {
+        extra += "#include <unordered_set>\n";
+    }
+    if (code.includes("map") && !code.includes("unordered_map")) {
+        extra += "#include <map>\n";
+    }
+    if (code.includes("set") && !code.includes("unordered_set")) {
+        extra += "#include <set>\n";
+    }
+    if (code.includes("queue") || code.includes("priority_queue") || pStr.includes("queue") || pStr.includes("heap") || pStr.includes("bfs")) {
+        extra += "#include <queue>\n";
+    }
+    if (code.includes("stack") || pStr.includes("stack") || pStr.includes("monotonic")) {
+        extra += "#include <stack>\n";
+    }
+    if (code.includes("cmath") || code.includes("pow") || code.includes("sqrt") || code.includes("ceil") || code.includes("floor") || pStr.includes("math")) {
+        extra += "#include <cmath>\n";
+    }
+
+    return `${extra}${BASE_HARNESS_CORE}\n${BASE_HARNESS_DEFINITIONS}\n`;
+}
+
+// Standard DSA Definitions & Serialization Utilities
+const BASE_HARNESS_DEFINITIONS = `
 using namespace std;
 
-// Standard DSA Definitions
 struct ListNode {
     int val;
     ListNode *next;
@@ -743,9 +772,11 @@ public:
         .map(p => `${p.type} ${p.name}`)
         .join(", ");
 
+    const safeReturnType = config.returnType?.trim().toLowerCase() === "void" ? "void" : (config.returnType || "int");
+
     return `class Solution {
 public:
-    ${config.returnType} ${config.functionName}(${paramsStr}) {
+    ${safeReturnType} ${config.functionName}(${paramsStr}) {
         // Write your solution here
         
     }
@@ -990,7 +1021,7 @@ export function generateCppHarness(studentCode, problem, testCases = []) {
     }
 
     const fullHarness = `
-${BASE_HARNESS_PREAMBLE}
+${getHarnessPreamble(studentCode, problem)}
 
 // ==========================================
 // STUDENT CODE STARTS HERE

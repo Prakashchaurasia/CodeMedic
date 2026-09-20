@@ -1,12 +1,10 @@
-import { createEmception, compileAndRun, TOOLCHAIN_PRESETS } from "@gameguild/emception-browser";
+import { createEmception, compileAndRun } from "@gameguild/emception-browser";
 import { ToolchainPreset } from "emception";
 import { generateCppHarness, parseHarnessOutput } from "./executionHarness";
 
 let emceptionInstance = null;
 let emceptionInitPromise = null;
 let isExecuting = false;
-let isWarm = false;
-let warmupPromise = null;
 let runtimeStatus = "idle"; // "idle" | "warming" | "ready"
 const statusListeners = new Set();
 
@@ -56,15 +54,15 @@ export function terminateAndResetEmception() {
     }
     emceptionInitPromise = null;
     isExecuting = false;
-    isWarm = false;
     setStatus("idle");
-    console.log("Emception runtime terminated and reset.");
+    console.log("[CodeMedic Executor] worker terminated/reset");
 }
 
 /**
  * Returns a running Emception instance or initializes a new one.
- * Cold load downloads from local /cdn/manifest.json.
+ * Cold load downloads manifest from local /cdn/manifest.json.
  * Warm runs reuse the healthy alive singleton worker.
+ * Bounded by a 25-second deterministic infrastructure startup timeout.
  */
 export async function getEmception() {
     if (emceptionInstance) {
@@ -79,7 +77,7 @@ export async function getEmception() {
         let bootTimer = null;
         try {
             setStatus("warming");
-            console.log("Starting Emception browser runtime...");
+            console.log("[CodeMedic Executor] initializing environment");
             const bootPromise = createEmception({
                 tty: "none",
                 manifestUrl: "/cdn/manifest.json",
@@ -91,24 +89,27 @@ export async function getEmception() {
                 },
             });
 
-            // 45s safety guard for cold download of initial bundles
+            // 25s safety guard for cold download of initial bundles
             const timeoutPromise = new Promise((_, reject) => {
                 bootTimer = setTimeout(() => {
-                    reject(new Error("Compiler runtime initialization timed out."));
-                }, 45000);
+                    reject(new Error("C++ execution environment failed to initialize: startup timed out."));
+                }, 25000);
             });
 
             const instance = await Promise.race([bootPromise, timeoutPromise]);
             if (bootTimer) clearTimeout(bootTimer);
 
-            console.log("Emception browser runtime started successfully.");
             emceptionInstance = instance;
+            setStatus("ready");
+            console.log("[CodeMedic Executor] environment ready");
             return instance;
         } catch (err) {
             if (bootTimer) clearTimeout(bootTimer);
-            console.error("Failed to start Emception browser runtime:", err);
+            console.error("[CodeMedic Executor] Failed to start Emception browser runtime:", err);
             terminateAndResetEmception();
             throw err;
+        } finally {
+            emceptionInitPromise = null;
         }
     })();
 
@@ -116,45 +117,21 @@ export async function getEmception() {
 }
 
 /**
- * Warms up the C++ execution environment in the background by compiling a minimal DSA program.
- * This pre-downloads and extracts Clang, WASM-LD, usr-include, and libc++ into IndexedDB,
- * ensuring subsequent student code runs take ~1 second instead of waiting for asset download.
+ * Ensures the C++ execution environment is booted and ready in the background.
+ * Booting takes ~1 second. Does NOT block the worker with heavy compilation.
  */
 export async function preloadCppExecutor() {
-    if (isWarm) return;
-    if (warmupPromise) return warmupPromise;
-
-    warmupPromise = (async () => {
-        try {
-            console.log("Preloading and warming C++ environment in background...");
-            const em = await getEmception();
-
-            const dummyPaths = {
-                sourcePath: "warmup.cpp",
-                objectPath: "warmup.o",
-                wasmPath: "warmup.wasm",
-            };
-
-            // Pre-compile standard DSA headers so they are cached in IndexedDB
-            await compileAndRun(em, {
-                toolchain: ToolchainPreset.CPP,
-                source: `#include <iostream>\n#include <vector>\n#include <string>\n#include <algorithm>\n#include <chrono>\nint main(){ std::vector<int> v = {1, 2}; return v.empty() ? 1 : 0; }`,
-                cwd: "/home/user/default",
-                paths: dummyPaths,
-            });
-
-            isWarm = true;
-            setStatus("ready");
-            console.log("C++ execution environment is warmed and ready!");
-        } catch (err) {
-            console.warn("Background warmup note:", err);
-            setStatus(emceptionInstance ? "ready" : "idle");
-        } finally {
-            warmupPromise = null;
-        }
-    })();
-
-    return warmupPromise;
+    if (emceptionInstance && runtimeStatus === "ready") {
+        return emceptionInstance;
+    }
+    try {
+        console.log("[CodeMedic Executor] initializing environment");
+        const em = await getEmception();
+        return em;
+    } catch (err) {
+        console.warn("[CodeMedic Executor] preload note:", err?.message || err);
+        return null;
+    }
 }
 
 /**
@@ -164,19 +141,11 @@ export async function preloadCppExecutor() {
  * - Infrastructure initialization, WASM loading, compilation, and linking do NOT consume student time.
  * - The student execution watchdog timer (EXACTLY 5,000 ms) starts ONLY when the student's compiled
  *   binary enters the 'run' (wasi-run) phase.
+ * - Compilation and linking are guarded by a 35-second infrastructure timeout to prevent infinite hangs.
  * - Healthy workers are kept warm and reused across runs.
  * - If student code loops infinitely and exceeds 5000 ms, the worker is terminated and reset cleanly.
  */
 export async function runCppCode(code, stdin = "") {
-    // If background warmup is actively compiling/caching, cleanly await it so we don't collide
-    if (warmupPromise) {
-        try {
-            await warmupPromise;
-        } catch (_) {
-            // Warmup failure logged in preloadCppExecutor; proceed to run
-        }
-    }
-
     if (isExecuting) {
         return {
             success: false,
@@ -191,10 +160,11 @@ export async function runCppCode(code, stdin = "") {
     }
 
     isExecuting = true;
+    const execId = Math.random().toString(36).slice(2, 8);
     const paths = {
-        sourcePath: "solution.cpp",
-        objectPath: "solution.o",
-        wasmPath: "solution.wasm",
+        sourcePath: `solution_${execId}.cpp`,
+        objectPath: `solution_${execId}.o`,
+        wasmPath: `solution_${execId}.wasm`,
     };
 
     let em = null;
@@ -206,7 +176,7 @@ export async function runCppCode(code, stdin = "") {
             success: false,
             exitCode: -1,
             stdout: "",
-            stderr: bootErr?.message || "Browser execution unavailable",
+            stderr: bootErr?.message || "C++ execution environment failed to initialize.",
             durationMs: 0,
             timedOut: false,
             browserUnavailable: true,
@@ -217,14 +187,31 @@ export async function runCppCode(code, stdin = "") {
     let stdoutBuf = "";
     let stderrBuf = "";
     let studentWatchdog = null;
+    let compileWatchdog = null;
+    let runStartupWatchdog = null;
     let isStudentTle = false;
+    let isCompileTimeout = false;
     let currentPhase = "init";
+    let studentStarted = false;
+    const isHarnessCode = code.includes("__CODEMEDIC_OUTPUT_START__");
 
     try {
-        console.log(`Compiling and running C++ (${paths.sourcePath})...`);
+        console.log("[CodeMedic Executor] compile started");
+
+        // Infrastructure safety guard on compilation + linking phases (downloads clang/lld on cold run)
+        const compileTimeoutPromise = new Promise((_, reject) => {
+            compileWatchdog = setTimeout(() => {
+                if (currentPhase !== "run") {
+                    isCompileTimeout = true;
+                    console.warn("[CodeMedic Executor] Compilation/linking exceeded 120s infrastructure limit!");
+                    terminateAndResetEmception();
+                    reject(new Error("C++ compilation timed out. Environment has been reset. Please try again."));
+                }
+            }, 120000);
+        });
 
         // Execute the compile -> link -> run pipeline
-        const pipelineResult = await compileAndRun(em, {
+        const executionPromise = compileAndRun(em, {
             toolchain: ToolchainPreset.CPP,
             source: code,
             cwd: "/home/user/default",
@@ -232,6 +219,22 @@ export async function runCppCode(code, stdin = "") {
             paths,
             onStdout: (text) => {
                 stdoutBuf += text;
+
+                // For harness runs: student execution watchdog (EXACTLY 5000ms) starts
+                // only when the program has loaded and entered main()!
+                if (isHarnessCode && !studentStarted && stdoutBuf.includes("__CODEMEDIC_OUTPUT_START__")) {
+                    studentStarted = true;
+                    if (runStartupWatchdog) {
+                        clearTimeout(runStartupWatchdog);
+                        runStartupWatchdog = null;
+                    }
+                    console.log("[CodeMedic Executor] student execution started");
+                    studentWatchdog = setTimeout(() => {
+                        isStudentTle = true;
+                        console.warn("[CodeMedic Executor] Student execution exceeded 5000ms limit! Terminating worker.");
+                        terminateAndResetEmception();
+                    }, 5000);
+                }
             },
             onStderr: (text) => {
                 stderrBuf += text;
@@ -240,20 +243,34 @@ export async function runCppCode(code, stdin = "") {
                 currentPhase = phase;
                 console.log(`[CodeMedic Execution Phase: ${phase}]`);
 
-                // *** START EXACT 5-SECOND (5000ms) STUDENT EXECUTION TIMER ***
-                // Only starts when the compiled binary actually begins executing in wasi-run!
-                if (phase === "run") {
+                if (phase === "compile") {
+                    console.log("[CodeMedic Executor] compile started");
+                } else if (phase === "link") {
+                    console.log("[CodeMedic Executor] compile completed");
+                } else if (phase === "run") {
+                    if (compileWatchdog) {
+                        clearTimeout(compileWatchdog);
+                        compileWatchdog = null;
+                    }
+
+                    console.log("[CodeMedic Executor] student execution started");
+
+                    // 5-second student code watchdog (+500ms WASI startup grace)
                     studentWatchdog = setTimeout(() => {
                         isStudentTle = true;
-                        console.warn("Student code execution exceeded 5000ms limit! Terminating worker.");
+                        console.warn("[CodeMedic Executor] Student execution exceeded 5000ms limit! Terminating worker.");
                         terminateAndResetEmception();
-                    }, 5000);
+                    }, 5500);
                 }
             },
         });
 
+        const pipelineResult = await Promise.race([executionPromise, compileTimeoutPromise]);
+
+        if (compileWatchdog) clearTimeout(compileWatchdog);
+        if (runStartupWatchdog) clearTimeout(runStartupWatchdog);
         if (studentWatchdog) clearTimeout(studentWatchdog);
-        isExecuting = false;
+        console.log("[CodeMedic Executor] execution completed");
 
         // Check if student execution timed out
         if (isStudentTle) {
@@ -299,8 +316,8 @@ export async function runCppCode(code, stdin = "") {
         };
 
     } catch (error) {
+        if (compileWatchdog) clearTimeout(compileWatchdog);
         if (studentWatchdog) clearTimeout(studentWatchdog);
-        isExecuting = false;
 
         if (isStudentTle) {
             return {
@@ -313,6 +330,19 @@ export async function runCppCode(code, stdin = "") {
                 phase: "run",
                 browserUnavailable: false,
                 isInfrastructureError: false,
+            };
+        }
+
+        if (isCompileTimeout) {
+            return {
+                success: false,
+                exitCode: -1,
+                stdout: "",
+                stderr: "C++ compilation timed out. Environment has been reset. Please try again.",
+                durationMs: 35000,
+                timedOut: false,
+                browserUnavailable: false,
+                isInfrastructureError: true,
             };
         }
 
@@ -329,6 +359,10 @@ export async function runCppCode(code, stdin = "") {
             browserUnavailable: true,
             isInfrastructureError: true,
         };
+    } finally {
+        isExecuting = false;
+        if (compileWatchdog) clearTimeout(compileWatchdog);
+        if (studentWatchdog) clearTimeout(studentWatchdog);
     }
 }
 
@@ -369,7 +403,7 @@ function cleanCompilerErrors(stderr, harnessCode) {
 
     for (const line of errorLines) {
         // Match standard clang error format: <file>:<line>:<col>: error: <message>
-        const match = line.match(/:(\d+):(\d+):\s*(error|warning|fatal error):\s*(.*)/i);
+        const match = line.match(/(?:solution[^\s:]*\.cpp|\/home\/user\/[^\s:]+):(\d+):(\d+):\s*(error|warning|fatal error):\s*(.*)/i);
         if (match) {
             const rawLine = parseInt(match[1], 10);
             const col = match[2];
@@ -404,16 +438,18 @@ export async function executeStudentSolution(studentCode, problem, testCases = [
 
         // 1. Check if browser WASM runtime is unavailable or failed at infrastructure level
         if (rawResult.browserUnavailable || rawResult.isInfrastructureError) {
+            console.log("[CodeMedic Executor] final status: Execution Infrastructure Error");
             return {
                 success: false,
-                status: "Execution Error",
+                status: "Execution Infrastructure Error",
                 message: rawResult.stderr?.includes("busy")
                     ? "Execution system is currently busy. Please wait a moment and try again."
-                    : "Execution Infrastructure Error: The browser compiler runtime encountered an issue and was safely reset. Your code was not penalized. Please try running again.",
+                    : (rawResult.stderr || "Execution Infrastructure Error: The browser compiler runtime encountered an issue and was safely reset. Please try running again."),
                 testCases: [],
                 passedTests: 0,
                 totalTests: 0,
                 compilationError: null,
+                runtimeError: null,
                 executionTimeMs: rawResult.durationMs || 0,
                 rawResult
             };
@@ -421,6 +457,7 @@ export async function executeStudentSolution(studentCode, problem, testCases = [
 
         // 2. Check timeout (Student Time Limit Exceeded during 'run' phase: 5000ms limit)
         if (rawResult.timedOut) {
+            console.log("[CodeMedic Executor] final status: Time Limit Exceeded");
             return {
                 success: false,
                 status: "Time Limit Exceeded",
@@ -429,6 +466,7 @@ export async function executeStudentSolution(studentCode, problem, testCases = [
                 passedTests: 0,
                 totalTests: 0,
                 compilationError: null,
+                runtimeError: null,
                 executionTimeMs: rawResult.durationMs || 5000,
                 rawResult
             };
@@ -443,6 +481,7 @@ export async function executeStudentSolution(studentCode, problem, testCases = [
 
             if (isCompilerDiagnostic) {
                 const cleanedError = cleanCompilerErrors(rawResult.stderr, harnessCode);
+                console.log("[CodeMedic Executor] final status: Compilation Error");
                 return {
                     success: false,
                     status: "Compilation Error",
@@ -451,20 +490,23 @@ export async function executeStudentSolution(studentCode, problem, testCases = [
                     passedTests: 0,
                     totalTests: 0,
                     compilationError: cleanedError || stderrPlain,
+                    runtimeError: null,
                     executionTimeMs: rawResult.durationMs,
                     rawResult
                 };
             }
 
             // Infrastructure/System Error occurred during compiler run
+            console.log("[CodeMedic Executor] final status: Execution Infrastructure Error");
             return {
                 success: false,
-                status: "Execution Error",
+                status: "Execution Infrastructure Error",
                 message: stderrPlain ? `Execution System Error: ${stderrPlain}` : "Execution System Error: The compiler environment failed to initialize.",
                 testCases: [],
                 passedTests: 0,
                 totalTests: 0,
                 compilationError: null,
+                runtimeError: null,
                 executionTimeMs: rawResult.durationMs,
                 rawResult
             };
@@ -474,6 +516,7 @@ export async function executeStudentSolution(studentCode, problem, testCases = [
         if (rawResult.exitCode !== 0 && !rawResult.stdout.includes("__CODEMEDIC_OUTPUT_END__")) {
             const stderrText = stripAnsi(rawResult.stderr || "");
             if (stderrText.toLowerCase().includes("bad_alloc") || stderrText.toLowerCase().includes("out of memory")) {
+                console.log("[CodeMedic Executor] final status: Memory Limit Exceeded");
                 return {
                     success: false,
                     status: "Memory Limit Exceeded",
@@ -482,11 +525,13 @@ export async function executeStudentSolution(studentCode, problem, testCases = [
                     passedTests: 0,
                     totalTests: 0,
                     compilationError: null,
+                    runtimeError: null,
                     executionTimeMs: rawResult.durationMs,
                     rawResult
                 };
             }
 
+            console.log("[CodeMedic Executor] final status: Runtime Error");
             return {
                 success: false,
                 status: "Runtime Error",
@@ -495,6 +540,7 @@ export async function executeStudentSolution(studentCode, problem, testCases = [
                 passedTests: 0,
                 totalTests: 0,
                 compilationError: null,
+                runtimeError: stderrText || "Runtime Error",
                 executionTimeMs: rawResult.durationMs,
                 rawResult
             };
@@ -506,6 +552,7 @@ export async function executeStudentSolution(studentCode, problem, testCases = [
         if (testCaseResults.length === 0) {
             // Check if problem genuinely had 0 test cases
             if (rawResult.exitCode === 0 && rawResult.stdout.includes("__CODEMEDIC_OUTPUT_START__")) {
+                console.log("[CodeMedic Executor] final status: Accepted");
                 return {
                     success: true,
                     status: "Accepted",
@@ -514,20 +561,23 @@ export async function executeStudentSolution(studentCode, problem, testCases = [
                     passedTests: 0,
                     totalTests: 0,
                     compilationError: null,
+                    runtimeError: null,
                     executionTimeMs: rawResult.durationMs,
                     rawResult
                 };
             }
 
             // Otherwise, infrastructure was unable to read output
+            console.log("[CodeMedic Executor] final status: Execution Infrastructure Error");
             return {
                 success: false,
-                status: "Execution Error",
+                status: "Execution Infrastructure Error",
                 message: "Execution system error: Unable to read test execution results.",
                 testCases: [],
                 passedTests: 0,
                 totalTests: 0,
                 compilationError: null,
+                runtimeError: null,
                 executionTimeMs: rawResult.durationMs,
                 rawResult
             };
@@ -536,6 +586,7 @@ export async function executeStudentSolution(studentCode, problem, testCases = [
         // Check if any individual test case threw a memory or runtime exception
         const memError = testCaseResults.find(tc => tc.errorType === "Memory Limit Exceeded");
         if (memError) {
+            console.log("[CodeMedic Executor] final status: Memory Limit Exceeded");
             return {
                 success: false,
                 status: "Memory Limit Exceeded",
@@ -544,6 +595,7 @@ export async function executeStudentSolution(studentCode, problem, testCases = [
                 passedTests: testCaseResults.filter(tc => tc.passed).length,
                 totalTests: testCaseResults.length,
                 compilationError: null,
+                runtimeError: null,
                 executionTimeMs: rawResult.durationMs,
                 rawResult
             };
@@ -551,6 +603,7 @@ export async function executeStudentSolution(studentCode, problem, testCases = [
 
         const rtError = testCaseResults.find(tc => tc.errorType === "Runtime Error");
         if (rtError) {
+            console.log("[CodeMedic Executor] final status: Runtime Error");
             return {
                 success: false,
                 status: "Runtime Error",
@@ -559,6 +612,7 @@ export async function executeStudentSolution(studentCode, problem, testCases = [
                 passedTests: testCaseResults.filter(tc => tc.passed).length,
                 totalTests: testCaseResults.length,
                 compilationError: null,
+                runtimeError: rtError.actual || "Runtime Error",
                 executionTimeMs: rawResult.durationMs,
                 rawResult
             };
@@ -568,9 +622,12 @@ export async function executeStudentSolution(studentCode, problem, testCases = [
         const totalTests = testCaseResults.length;
         const allPassed = passedTests === totalTests && totalTests > 0;
 
+        const finalStatus = allPassed ? "Accepted" : "Wrong Answer";
+        console.log(`[CodeMedic Executor] final status: ${finalStatus}`);
+
         return {
             success: allPassed,
-            status: allPassed ? "Accepted" : "Wrong Answer",
+            status: finalStatus,
             message: allPassed 
                 ? `Accepted (${passedTests}/${totalTests} test cases passed)` 
                 : `Wrong Answer (${passedTests}/${totalTests} test cases passed)`,
@@ -578,6 +635,7 @@ export async function executeStudentSolution(studentCode, problem, testCases = [
             passedTests,
             totalTests,
             compilationError: null,
+            runtimeError: null,
             executionTimeMs: rawResult.durationMs,
             rawResult
         };
@@ -585,14 +643,16 @@ export async function executeStudentSolution(studentCode, problem, testCases = [
     } catch (err) {
         console.error("Execution failed:", err);
         terminateAndResetEmception();
+        console.log("[CodeMedic Executor] final status: Execution Infrastructure Error");
         return {
             success: false,
-            status: "Execution Error",
+            status: "Execution Infrastructure Error",
             message: err?.message || "An unexpected error occurred during execution.",
             testCases: [],
             passedTests: 0,
             totalTests: 0,
             compilationError: null,
+            runtimeError: null,
             executionTimeMs: 0,
             rawResult: null
         };

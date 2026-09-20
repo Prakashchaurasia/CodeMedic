@@ -316,7 +316,7 @@ function AnalyzeCode({ problem, setPage, userId }) {
                 let aiResult = null;
                 try {
                     // For runnable code (Accepted, Wrong Answer, Runtime Error, TLE), perform code & thinking analysis
-                    if (result.status !== "Compilation Error" && result.status !== "Execution Error") {
+                    if (result.status !== "Compilation Error" && result.status !== "Execution Error" && result.status !== "Execution Infrastructure Error") {
                         setIsAnalyzing(true);
                         const thinking = {
                             dataStructures: selectedDataStructures,
