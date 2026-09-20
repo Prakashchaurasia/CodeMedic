@@ -307,6 +307,9 @@ function AnalyzeCode({ problem, setPage, userId }) {
             const result = await activeLang.execute(code, problem, problemTestCases);
             console.log("Local execution result:", result);
             setExecutionResult(result);
+            if (typeof window !== "undefined") {
+                window.__lastExecutionResult = result;
+            }
             setActiveTab(0);
             // Immediately release execution UI state so button returns to ready state
             setIsExecuting(false);
