@@ -1,17 +1,47 @@
 import { createEmception } from "@gameguild/emception-browser";
 import { generateCppHarness, parseHarnessOutput } from "./executionHarness";
 
-let emceptionPromise = null;
+let emceptionInstance = null;
+let emceptionInitPromise = null;
+let isExecuting = false;
 
+/**
+ * Cleanly terminates the current Web Worker instance and resets the singleton.
+ * Safe to call at any time (e.g. on timeout, unhandled worker error, or component unmount).
+ */
+export function terminateAndResetEmception() {
+    if (emceptionInstance) {
+        try {
+            emceptionInstance.dispose();
+        } catch (e) {
+            console.warn("Error disposing Emception instance:", e);
+        }
+        emceptionInstance = null;
+    }
+    emceptionInitPromise = null;
+    isExecuting = false;
+    console.log("Emception runtime terminated and reset.");
+}
+
+/**
+ * Returns a running Emception instance or initializes a new one.
+ * Cold load downloads from local /cdn/manifest.json (with a 30s timeout guard).
+ * Warm runs reuse the alive singleton worker.
+ */
 export async function getEmception() {
-    if (emceptionPromise) {
-        return emceptionPromise;
+    if (emceptionInstance) {
+        return emceptionInstance;
     }
 
-    emceptionPromise = (async () => {
+    if (emceptionInitPromise) {
+        return emceptionInitPromise;
+    }
+
+    emceptionInitPromise = (async () => {
+        let bootTimer = null;
         try {
             console.log("Starting Emception browser runtime...");
-            const instance = await createEmception({
+            const bootPromise = createEmception({
                 tty: "none",
                 manifestUrl: "/cdn/manifest.json",
                 onStdout: (text) => {
@@ -21,19 +51,52 @@ export async function getEmception() {
                     console.error("[C++ stderr]", text);
                 },
             });
-            console.log("Emception browser runtime started.");
+
+            const timeoutPromise = new Promise((_, reject) => {
+                bootTimer = setTimeout(() => {
+                    reject(new Error("Compiler runtime initialization timed out after 30 seconds."));
+                }, 30000);
+            });
+
+            const instance = await Promise.race([bootPromise, timeoutPromise]);
+            if (bootTimer) clearTimeout(bootTimer);
+
+            console.log("Emception browser runtime started successfully.");
+            emceptionInstance = instance;
             return instance;
         } catch (err) {
+            if (bootTimer) clearTimeout(bootTimer);
             console.error("Failed to start Emception browser runtime:", err);
-            emceptionPromise = null; // Allow retry on failure
+            terminateAndResetEmception();
             throw err;
         }
     })();
 
-    return emceptionPromise;
+    return emceptionInitPromise;
 }
 
+/**
+ * Runs C++ code using Emception WASM in a Web Worker.
+ * Enforces two separate timeout phases:
+ * 1. Compilation/Link Phase: 20000ms (Classified as Execution Error if timed out)
+ * 2. Execution (wasi-run) Phase: 4000ms (Classified as Student Time Limit Exceeded if timed out)
+ * On any timeout or unrecoverable error, the worker is immediately terminated and reset.
+ */
 export async function runCppCode(code, stdin = "") {
+    if (isExecuting) {
+        return {
+            success: false,
+            exitCode: -1,
+            stdout: "",
+            stderr: "Execution system busy. Please wait for the current run to finish.",
+            durationMs: 0,
+            timedOut: false,
+            browserUnavailable: false,
+            isInfrastructureError: true,
+        };
+    }
+
+    isExecuting = true;
     const runId = Math.random().toString(36).substring(2, 9);
     const paths = {
         sourcePath: `main_${runId}.cpp`,
@@ -41,11 +104,40 @@ export async function runCppCode(code, stdin = "") {
         wasmPath: `main_${runId}.wasm`,
     };
 
-    const executionPromise = (async () => {
-        try {
-            const em = await getEmception();
+    let em = null;
+    try {
+        em = await getEmception();
+    } catch (bootErr) {
+        isExecuting = false;
+        return {
+            success: false,
+            exitCode: -1,
+            stdout: "",
+            stderr: bootErr?.message || "Browser execution unavailable",
+            durationMs: 0,
+            timedOut: false,
+            browserUnavailable: true,
+            isInfrastructureError: true,
+        };
+    }
 
+    let currentPhase = "init";
+    let isTimedOut = false;
+    let timedOutPhase = null;
+    let phaseTimer = null;
+
+    const executePromise = (async () => {
+        try {
             console.log(`Compiling and running C++ (${paths.sourcePath})...`);
+            currentPhase = "write";
+
+            // Set 20-second compile/link timeout guard
+            phaseTimer = setTimeout(() => {
+                isTimedOut = true;
+                timedOutPhase = currentPhase;
+                console.warn(`Compilation/linking timed out during phase: ${currentPhase}. Disposing worker.`);
+                terminateAndResetEmception();
+            }, 20000);
 
             const result = await em.compileAndRun(code, {
                 cwd: "/home/user/default",
@@ -53,7 +145,40 @@ export async function runCppCode(code, stdin = "") {
                 paths,
                 stdout: "capture",
                 stderr: "capture",
+                onPhase: (phase) => {
+                    currentPhase = phase;
+                    console.log(`[Emception phase: ${phase}]`);
+                    if (phase === "run") {
+                        // Switch from compile timeout to student code execution timeout: 4000ms
+                        if (phaseTimer) clearTimeout(phaseTimer);
+                        phaseTimer = setTimeout(() => {
+                            isTimedOut = true;
+                            timedOutPhase = "run";
+                            console.warn("Student code execution timed out (4000ms limit). Disposing worker.");
+                            terminateAndResetEmception();
+                        }, 4000);
+                    }
+                },
             });
+
+            if (phaseTimer) clearTimeout(phaseTimer);
+            isExecuting = false;
+
+            if (isTimedOut) {
+                return {
+                    success: false,
+                    exitCode: -1,
+                    stdout: "",
+                    stderr: timedOutPhase === "run"
+                        ? "Time Limit Exceeded: Execution exceeded 4000ms."
+                        : "Compiler Timeout: Compilation took too long to complete.",
+                    durationMs: timedOutPhase === "run" ? 4000 : 20000,
+                    timedOut: timedOutPhase === "run",
+                    phase: timedOutPhase,
+                    browserUnavailable: false,
+                    isInfrastructureError: timedOutPhase !== "run",
+                };
+            }
 
             console.log("C++ execution completed:", result);
 
@@ -65,9 +190,31 @@ export async function runCppCode(code, stdin = "") {
                 durationMs: result.durationMs || 0,
                 timedOut: result.timedOut || false,
                 signal: result.signal,
+                phase: currentPhase,
+                isInfrastructureError: false,
             };
         } catch (error) {
+            if (phaseTimer) clearTimeout(phaseTimer);
+            isExecuting = false;
+
+            if (isTimedOut) {
+                return {
+                    success: false,
+                    exitCode: -1,
+                    stdout: "",
+                    stderr: timedOutPhase === "run"
+                        ? "Time Limit Exceeded: Execution exceeded 4000ms."
+                        : "Compiler Timeout: Compilation took too long to complete.",
+                    durationMs: timedOutPhase === "run" ? 4000 : 20000,
+                    timedOut: timedOutPhase === "run",
+                    phase: timedOutPhase,
+                    browserUnavailable: false,
+                    isInfrastructureError: timedOutPhase !== "run",
+                };
+            }
+
             console.error("C++ execution error:", error);
+            terminateAndResetEmception();
 
             return {
                 success: false,
@@ -77,26 +224,36 @@ export async function runCppCode(code, stdin = "") {
                 durationMs: 0,
                 timedOut: false,
                 browserUnavailable: true,
+                isInfrastructureError: true,
             };
         }
     })();
 
-    // 90-second hard timeout guarantee (allows cold initial bundle download; warm runs take ~1-2s)
-    const timeoutPromise = new Promise((resolve) => {
-        setTimeout(() => {
-            resolve({
-                success: false,
-                exitCode: -1,
-                stdout: "",
-                stderr: "Time Limit Exceeded: Execution exceeded time limit.",
-                durationMs: 90000,
-                timedOut: true,
-                browserUnavailable: false,
-            });
-        }, 90000);
+    // Safety watchdog: polls every 50ms in case worker termination aborted the promise
+    const watchdogPromise = new Promise((resolve) => {
+        const interval = setInterval(() => {
+            if (isTimedOut) {
+                clearInterval(interval);
+                resolve({
+                    success: false,
+                    exitCode: -1,
+                    stdout: "",
+                    stderr: timedOutPhase === "run"
+                        ? "Time Limit Exceeded: Execution exceeded 4000ms."
+                        : "Execution System Error: Operation timed out.",
+                    durationMs: timedOutPhase === "run" ? 4000 : 20000,
+                    timedOut: timedOutPhase === "run",
+                    phase: timedOutPhase,
+                    browserUnavailable: false,
+                    isInfrastructureError: timedOutPhase !== "run",
+                });
+            } else if (!isExecuting) {
+                clearInterval(interval);
+            }
+        }, 50);
     });
 
-    return Promise.race([executionPromise, timeoutPromise]);
+    return Promise.race([executePromise, watchdogPromise]);
 }
 
 /**
@@ -169,32 +326,34 @@ export async function executeStudentSolution(studentCode, problem, testCases = [
         console.log("Generated C++ Harness. Running in browser WASM...");
         const rawResult = await runCppCode(harnessCode);
 
-        // 1. Check if browser WASM runtime is unavailable (Execution/Infrastructure Error)
-        if (rawResult.browserUnavailable) {
+        // 1. Check if browser WASM runtime is unavailable or failed at infrastructure level
+        if (rawResult.browserUnavailable || rawResult.isInfrastructureError) {
             return {
                 success: false,
                 status: "Execution Error",
-                message: "WebAssembly C++ compiler could not be initialized in this browser session. You can still submit your code for AI diagnosis.",
+                message: rawResult.stderr?.includes("busy")
+                    ? "Execution system is currently busy. Please wait a moment and try again."
+                    : "Execution Infrastructure Error: The browser compiler runtime encountered an issue and was safely reset. Your code was not penalized. Please try running again.",
                 testCases: [],
                 passedTests: 0,
                 totalTests: 0,
                 compilationError: null,
-                executionTimeMs: 0,
+                executionTimeMs: rawResult.durationMs || 0,
                 rawResult
             };
         }
 
-        // 2. Check timeout (Time Limit Exceeded)
+        // 2. Check timeout (Student Time Limit Exceeded during 'run' phase)
         if (rawResult.timedOut) {
             return {
                 success: false,
                 status: "Time Limit Exceeded",
-                message: "Time Limit Exceeded: Execution timed out. Check for infinite loops or inefficient algorithms.",
+                message: `Time Limit Exceeded: Execution exceeded ${rawResult.durationMs || 4000}ms. Check for infinite loops or inefficient algorithms.`,
                 testCases: [],
                 passedTests: 0,
                 totalTests: 0,
                 compilationError: null,
-                executionTimeMs: rawResult.durationMs,
+                executionTimeMs: rawResult.durationMs || 4000,
                 rawResult
             };
         }
@@ -349,6 +508,7 @@ export async function executeStudentSolution(studentCode, problem, testCases = [
 
     } catch (err) {
         console.error("Execution failed:", err);
+        terminateAndResetEmception();
         return {
             success: false,
             status: "Execution Error",
@@ -364,11 +524,7 @@ export async function executeStudentSolution(studentCode, problem, testCases = [
 }
 
 export function disposeCppExecutor() {
-    if (emceptionPromise) {
-        emceptionPromise.then((instance) => instance?.dispose()).catch(() => {});
-        emceptionPromise = null;
-        console.log("Emception runtime disposed.");
-    }
+    terminateAndResetEmception();
 }
 
 export function preloadCppExecutor() {

@@ -11,8 +11,10 @@
   },
   "dependencies": {
     "@gameguild/emception-browser": "^4.4.0",
+    "@monaco-editor/react": "^4.7.0",
     "@supabase/supabase-js": "^2.116.0",
     "emception": "^4.4.0",
+    "monaco-editor": "^0.56.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },

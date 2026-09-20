@@ -107,6 +107,21 @@ namespace CodeMedicUtils {
         return res;
     }
 
+    inline vector<long long> parseVectorLongLong(const string& s) {
+        vector<long long> res;
+        string cleaned;
+        for (char c : s) {
+            if (c == '[' || c == ']' || c == ',') cleaned += ' ';
+            else cleaned += c;
+        }
+        stringstream ss(cleaned);
+        long long val;
+        while (ss >> val) {
+            res.push_back(val);
+        }
+        return res;
+    }
+
     inline vector<string> parseVectorString(const string& s) {
         vector<string> res;
         string cur;
@@ -144,6 +159,19 @@ namespace CodeMedicUtils {
         return res;
     }
 
+    inline vector<vector<long long>> parseVectorVectorLongLong(const string& s) {
+        vector<vector<long long>> res;
+        size_t start = 0;
+        while ((start = s.find('[', start + 1)) != string::npos) {
+            size_t end = s.find(']', start);
+            if (end == string::npos) break;
+            string inner = s.substr(start, end - start + 1);
+            res.push_back(parseVectorLongLong(inner));
+            start = end;
+        }
+        return res;
+    }
+
     inline ListNode* parseLinkedList(const vector<int>& vals) {
         if (vals.empty()) return nullptr;
         ListNode* head = new ListNode(vals[0]);
@@ -176,6 +204,16 @@ namespace CodeMedicUtils {
         return res;
     }
 
+    inline string serialize(const vector<long long>& v) {
+        string res = "[";
+        for (size_t i = 0; i < v.size(); ++i) {
+            if (i > 0) res += ", ";
+            res += to_string(v[i]);
+        }
+        res += "]";
+        return res;
+    }
+
     inline string serialize(const vector<string>& v) {
         string res = "[";
         for (size_t i = 0; i < v.size(); ++i) {
@@ -187,6 +225,16 @@ namespace CodeMedicUtils {
     }
 
     inline string serialize(const vector<vector<int>>& v) {
+        string res = "[";
+        for (size_t i = 0; i < v.size(); ++i) {
+            if (i > 0) res += ", ";
+            res += serialize(v[i]);
+        }
+        res += "]";
+        return res;
+    }
+
+    inline string serialize(const vector<vector<long long>>& v) {
         string res = "[";
         for (size_t i = 0; i < v.size(); ++i) {
             if (i > 0) res += ", ";
@@ -249,7 +297,9 @@ export function normalizeCppType(typeStr) {
     if (!typeStr) return "void";
     let cleaned = typeStr.trim().replace(/\s+/g, " ");
     cleaned = cleaned.replace(/^const\s+/, "");
+    if (cleaned.includes("vector<vector<long long")) return cleaned.includes("&") ? "vector<vector<long long>>&" : "vector<vector<long long>>";
     if (cleaned.includes("vector<vector<int")) return cleaned.includes("&") ? "vector<vector<int>>&" : "vector<vector<int>>";
+    if (cleaned.includes("vector<long long")) return cleaned.includes("&") ? "vector<long long>&" : "vector<long long>";
     if (cleaned.includes("vector<int")) return cleaned.includes("&") ? "vector<int>&" : "vector<int>";
     if (cleaned.includes("vector<string")) return cleaned.includes("&") ? "vector<string>&" : "vector<string>";
     if (cleaned.includes("vector<double")) return cleaned.includes("&") ? "vector<double>&" : "vector<double>";
@@ -717,14 +767,20 @@ export function generateCppHarness(studentCode, problem, testCases = []) {
     // Helper to generate parsing code for each parameter
     function generateParamParser(type, rawVarName, targetVarName) {
         const norm = normalizeCppType(type);
+        if (norm.startsWith("vector<vector<long long>>")) {
+            return `vector<vector<long long>> ${targetVarName} = CodeMedicUtils::parseVectorVectorLongLong(${rawVarName});`;
+        }
+        if (norm.startsWith("vector<vector<int>>")) {
+            return `vector<vector<int>> ${targetVarName} = CodeMedicUtils::parseVectorVectorInt(${rawVarName});`;
+        }
+        if (norm.startsWith("vector<long long>")) {
+            return `vector<long long> ${targetVarName} = CodeMedicUtils::parseVectorLongLong(${rawVarName});`;
+        }
         if (norm.startsWith("vector<int>")) {
             return `vector<int> ${targetVarName} = CodeMedicUtils::parseVectorInt(${rawVarName});`;
         }
         if (norm.startsWith("vector<string>")) {
             return `vector<string> ${targetVarName} = CodeMedicUtils::parseVectorString(${rawVarName});`;
-        }
-        if (norm.startsWith("vector<vector<int>>")) {
-            return `vector<vector<int>> ${targetVarName} = CodeMedicUtils::parseVectorVectorInt(${rawVarName});`;
         }
         if (norm === "ListNode*") {
             return `ListNode* ${targetVarName} = CodeMedicUtils::parseLinkedList(CodeMedicUtils::parseVectorInt(${rawVarName}));`;

@@ -4,6 +4,7 @@ import { analyzeSubmittedCode } from "../services/codeAnalysis";
 import { analyzeWithAI } from "../services/aiAnalysis";
 import { executeStudentSolution, preloadCppExecutor } from "../services/cppExecutor";
 import { generateStarterCode, inferExecutionConfig } from "../services/executionHarness";
+import CodeEditor from "./CodeEditor";
 
 function AnalyzeCode({ problem, setPage }) {
     useEffect(() => {
@@ -804,27 +805,61 @@ function AnalyzeCode({ problem, setPage }) {
 
                 {/* CODE EDITOR & RUNNER PANEL */}
                 <div className="code-panel">
-                    <div className="panel-header">
-                        <span>FUNCTION-ONLY SOLUTION</span>
-                        <select
-                            className="language-select"
-                            value={language}
-                            onChange={(event) => setLanguage(event.target.value)}
-                        >
-                            <option value="C++">C++ (Browser WASM)</option>
-                        </select>
+                    <div className="panel-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+                        <span style={{ fontSize: "11px", fontWeight: "800", letterSpacing: "1.2px", color: "#64748b" }}>
+                            FUNCTION-ONLY SOLUTION
+                        </span>
+                        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                            <label htmlFor="code-language-select" style={{ fontSize: "12px", color: "#94a3b8", fontWeight: "600" }}>
+                                Language:
+                            </label>
+                            <select
+                                id="code-language-select"
+                                className="language-select"
+                                value={language}
+                                onChange={(event) => setLanguage(event.target.value)}
+                                style={{
+                                    background: "#0f172a",
+                                    border: "1px solid #1e293b",
+                                    color: "#38bdf8",
+                                    borderRadius: "6px",
+                                    padding: "4px 8px",
+                                    fontSize: "12px",
+                                    fontWeight: "600",
+                                    cursor: "pointer",
+                                    outline: "none"
+                                }}
+                            >
+                                <option value="C++">C++ (Clang C++17)</option>
+                            </select>
+                            <span
+                                style={{
+                                    background: "rgba(56, 189, 248, 0.12)",
+                                    color: "#38bdf8",
+                                    border: "1px solid rgba(56, 189, 248, 0.25)",
+                                    padding: "3px 8px",
+                                    borderRadius: "4px",
+                                    fontSize: "10px",
+                                    fontWeight: "700",
+                                    letterSpacing: "0.5px"
+                                }}
+                                title="Executes entirely inside your browser via WebAssembly with zero server latency"
+                            >
+                                ⚡ BROWSER WASM
+                            </span>
+                        </div>
                     </div>
 
-                    <textarea
+                    <CodeEditor
                         value={code}
-                        onChange={(event) => {
-                            setCode(event.target.value);
+                        onChange={(newCode) => {
+                            setCode(newCode);
                             if (executionResult) setExecutionResult(null);
                             if (problemAttemptId) setProblemAttemptId(null);
                         }}
-                        placeholder={`class Solution {\npublic:\n    // Write your code here\n};`}
-                        spellCheck="false"
-                        style={{ minHeight: "340px", fontFamily: "'Fira Code', monospace", fontSize: "14px" }}
+                        disabled={isExecuting}
+                        height="420px"
+                        compilationError={executionResult?.compilationError}
                     />
 
                     <div className="code-meta">
@@ -928,6 +963,56 @@ function AnalyzeCode({ problem, setPage }) {
                                 >
                                     {executionResult.compilationError}
                                 </pre>
+                            )}
+
+                            {/* Time Limit Exceeded details box */}
+                            {executionResult.status === "Time Limit Exceeded" && (
+                                <div
+                                    style={{
+                                        background: "rgba(249, 115, 22, 0.12)",
+                                        border: "1px solid rgba(249, 115, 22, 0.35)",
+                                        borderRadius: "6px",
+                                        padding: "14px",
+                                        color: "#fdba74",
+                                        fontSize: "13px",
+                                        lineHeight: "1.6"
+                                    }}
+                                >
+                                    <div style={{ fontWeight: "700", color: "#fb923c", marginBottom: "4px" }}>
+                                        ⏱ Execution Time Limit Exceeded (~{executionResult.executionTimeMs || 4000} ms)
+                                    </div>
+                                    <div>
+                                        Your code ran for longer than the permitted execution limit (4000 ms). Common causes include:
+                                    </div>
+                                    <ul style={{ margin: "6px 0 0 18px", padding: 0 }}>
+                                        <li><strong>Infinite Loop:</strong> Loop condition (e.g. <code>while (i &lt; j)</code>) never terminates due to pointers not moving.</li>
+                                        <li><strong>Operator Precedence:</strong> In C++, <code>/</code> has higher precedence than <code>+</code>. An expression like <code>int mid = i + j / 2;</code> evaluates as <code>i + (j / 2)</code>. Use <code>i + (j - i) / 2</code> or <code>(i + j) / 2</code> instead.</li>
+                                        <li><strong>Time Complexity:</strong> The algorithm may be O(N²) or exponential where an O(N) or O(log N) approach is expected.</li>
+                                    </ul>
+                                </div>
+                            )}
+
+                            {/* Execution / Infrastructure Error details box */}
+                            {executionResult.status === "Execution Error" && (
+                                <div
+                                    style={{
+                                        background: "rgba(100, 116, 139, 0.15)",
+                                        border: "1px solid rgba(100, 116, 139, 0.35)",
+                                        borderRadius: "6px",
+                                        padding: "14px",
+                                        color: "#cbd5e1",
+                                        fontSize: "13px",
+                                        lineHeight: "1.6"
+                                    }}
+                                >
+                                    <div style={{ fontWeight: "700", color: "#94a3b8", marginBottom: "4px" }}>
+                                        ⚙️ Execution Infrastructure Notice
+                                    </div>
+                                    <div>{executionResult.message}</div>
+                                    <div style={{ marginTop: "6px", fontSize: "12px", color: "#64748b" }}>
+                                        The in-browser compiler environment was safely reset. Your solution algorithm was not marked incorrect or penalized. You can click <strong>Run Code</strong> again to retry.
+                                    </div>
+                                </div>
                             )}
 
                             {/* Test Cases Tabs */}
