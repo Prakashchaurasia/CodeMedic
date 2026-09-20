@@ -129,6 +129,14 @@ function InnerCodeEditor({
         if (typeof window !== "undefined") {
             window.__monacoEditor = editor;
             window.__monaco = monacoInstance;
+            window.__setCodeEditorValue = (val) => {
+                try {
+                    editor.setValue(val);
+                } catch (_) {}
+                try {
+                    onChange?.(val);
+                } catch (_) {}
+            };
         }
 
         try {

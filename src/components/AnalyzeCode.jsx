@@ -281,9 +281,33 @@ function AnalyzeCode({ problem, setPage, userId }) {
         setThinkingSubmitted(true);
     }
 
+    useEffect(() => {
+        if (typeof window !== "undefined") {
+            window.__setAnalyzeCode = (newVal) => {
+                setCode(newVal);
+                if (window.__monacoEditor) {
+                    try {
+                        window.__monacoEditor.setValue(newVal);
+                    } catch (_) {}
+                }
+            };
+        }
+    }, [setCode]);
+
     // Execute code locally in browser via Emception WASM and drive complete learning workflow
     async function handleRunCode() {
-        if (code.trim() === "") {
+        let codeToExecute = code;
+        if (typeof window !== "undefined" && window.__monacoEditor) {
+            try {
+                const editorVal = window.__monacoEditor.getValue();
+                if (typeof editorVal === "string" && editorVal.trim().length > 0) {
+                    codeToExecute = editorVal;
+                    setCode(editorVal);
+                }
+            } catch (_) {}
+        }
+
+        if (codeToExecute.trim() === "") {
             alert("Please write your code first.");
             return;
         }
@@ -304,7 +328,7 @@ function AnalyzeCode({ problem, setPage, userId }) {
 
         try {
             const activeLang = getLanguageConfig(selectedLanguage);
-            const result = await activeLang.execute(code, problem, problemTestCases);
+            const result = await activeLang.execute(codeToExecute, problem, problemTestCases);
             console.log("Local execution result:", result);
             setExecutionResult(result);
             if (typeof window !== "undefined") {
@@ -328,7 +352,7 @@ function AnalyzeCode({ problem, setPage, userId }) {
                         };
 
                         const basicResult = analyzeSubmittedCode({
-                            code,
+                            code: codeToExecute,
                             language,
                             problem,
                             thinking
@@ -337,7 +361,7 @@ function AnalyzeCode({ problem, setPage, userId }) {
                         aiResult = await analyzeWithAI({
                             problem,
                             thinking,
-                            code,
+                            code: codeToExecute,
                             language,
                             basicAnalysis: basicResult,
                             executionResult: result
@@ -365,7 +389,7 @@ function AnalyzeCode({ problem, setPage, userId }) {
                                     user_id: user.id,
                                     problem_id: problem.id,
                                     language: language || "C++",
-                                    submitted_code: code,
+                                    submitted_code: codeToExecute,
                                     status: result.status || (result.success ? "Accepted" : "Wrong Answer")
                                 })
                                 .select()
