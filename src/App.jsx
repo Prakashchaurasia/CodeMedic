@@ -27,10 +27,28 @@ function App() {
     const [profile, setProfile] = useState(null);
     const [loading, setLoading] = useState(true);
     const [showSignup, setShowSignup] = useState(false);
-    const [authNotification, setAuthNotification] = useState(null);
-    const [page, setPage] = useState("Dashboard");
-    const [selectedProblem, setSelectedProblem] = useState(null);
+    const [page, setPage] = useState(() => {
+        try {
+            return sessionStorage.getItem("codemedic_active_page") || "Dashboard";
+        } catch (_) {
+            return "Dashboard";
+        }
+    });
+    const [selectedProblem, setSelectedProblem] = useState(() => {
+        try {
+            const saved = sessionStorage.getItem("codemedic_selected_problem");
+            return saved ? JSON.parse(saved) : null;
+        } catch (_) {
+            return null;
+        }
+    });
     const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+
+    useEffect(() => {
+        try {
+            sessionStorage.setItem("codemedic_active_page", page);
+        } catch (_) {}
+    }, [page]);
 
     /*
         Get the user's unified profile
@@ -90,6 +108,10 @@ function App() {
                 fetchProfile(newSession.user.id);
             } else {
                 setProfile(null);
+                try {
+                    sessionStorage.removeItem("codemedic_selected_problem");
+                    sessionStorage.removeItem("codemedic_active_page");
+                } catch (_) {}
             }
         });
 
@@ -103,6 +125,13 @@ function App() {
     */
     function openAnalyzeCode(problem) {
         setSelectedProblem(problem);
+        try {
+            if (problem) {
+                sessionStorage.setItem("codemedic_selected_problem", JSON.stringify(problem));
+            } else {
+                sessionStorage.removeItem("codemedic_selected_problem");
+            }
+        } catch (_) {}
         setPage("Analyze Code");
     }
 

@@ -9,6 +9,14 @@ import CodeEditor from "./CodeEditor";
 
 function AnalyzeCode({ problem, setPage }) {
     const [selectedLanguage, setSelectedLanguage] = useState("cpp");
+    const [code, setCode] = useState(() => {
+        if (!problem) return "";
+        try {
+            return getLanguageConfig("cpp").generateStarterCode(problem);
+        } catch (_) {
+            return "";
+        }
+    });
     const [cppRuntimeStatus, setCppRuntimeStatus] = useState(getRuntimeStatus());
 
     useEffect(() => {
@@ -528,18 +536,22 @@ function AnalyzeCode({ problem, setPage }) {
     }
 
     function clearCode() {
-        const activeLang = getLanguageConfig(selectedLanguage);
-        const starter = activeLang.generateStarterCode(problem);
-        setCode(starter);
+        if (!problem) {
+            setCode("");
+            return;
+        }
+        try {
+            const activeLang = getLanguageConfig(selectedLanguage);
+            const starter = activeLang.generateStarterCode(problem);
+            setCode(starter);
+        } catch (_) {
+            setCode("");
+        }
         setExecutionResult(null);
         setProblemAttemptId(null);
         setAnalysis(null);
         setHelpLevel(0);
     }
-
-    const lineCount = code === "" ? 0 : code.split("\n").length;
-    const analysisHints = Array.isArray(analysis?.hints) ? analysis.hints : [];
-    const problemConfig = inferExecutionConfig(problem);
 
     // Helper to get status color badge
     function getStatusBadgeStyle(status) {
@@ -578,9 +590,9 @@ function AnalyzeCode({ problem, setPage }) {
                     }}
                 >
                     <div style={{ fontSize: "48px", marginBottom: "16px" }}>🩺</div>
-                    <h2 style={{ color: "#fff", marginBottom: "8px" }}>No Problem Selected</h2>
+                    <h2 style={{ color: "#fff", marginBottom: "8px" }}>Problem Not Selected</h2>
                     <p style={{ color: "#94a3b8", fontSize: "15px", lineHeight: "1.6", marginBottom: "24px" }}>
-                        Select a problem from the Practice Library or generate a customized one to start your thinking diagnosis and C++ coding.
+                        Select a problem from the Practice Library or generate a customized one to start your thinking diagnosis and coding.
                     </p>
                     <button
                         onClick={() => setPage && setPage("Practice Problem")}
@@ -595,7 +607,50 @@ function AnalyzeCode({ problem, setPage }) {
                             fontSize: "15px"
                         }}
                     >
-                        Browse Practice Problems →
+                        ← Back to Problems
+                    </button>
+                </div>
+            </section>
+        );
+    }
+
+    const lineCount = (code || "").split("\n").length;
+    const analysisHints = Array.isArray(analysis?.hints) ? analysis.hints : [];
+    const problemConfig = inferExecutionConfig(problem);
+
+    if (!problemConfig || !problemConfig.functionName || !Array.isArray(problemConfig.parameters)) {
+        return (
+            <section className="analyze-page">
+                <div
+                    style={{
+                        textAlign: "center",
+                        padding: "60px 24px",
+                        background: "rgba(30, 41, 59, 0.4)",
+                        borderRadius: "12px",
+                        border: "1px dashed rgba(245, 158, 11, 0.3)",
+                        margin: "40px auto",
+                        maxWidth: "600px"
+                    }}
+                >
+                    <div style={{ fontSize: "48px", marginBottom: "16px" }}>⚠️</div>
+                    <h2 style={{ color: "#fff", marginBottom: "8px" }}>Execution Configuration Unavailable</h2>
+                    <p style={{ color: "#94a3b8", fontSize: "15px", lineHeight: "1.6", marginBottom: "24px" }}>
+                        Execution configuration is unavailable for this problem.
+                    </p>
+                    <button
+                        onClick={() => setPage && setPage("Practice Problem")}
+                        style={{
+                            background: "linear-gradient(135deg, #2563eb, #3b82f6)",
+                            color: "#fff",
+                            padding: "12px 24px",
+                            borderRadius: "8px",
+                            border: "none",
+                            fontWeight: "600",
+                            cursor: "pointer",
+                            fontSize: "15px"
+                        }}
+                    >
+                        ← Back to Problems
                     </button>
                 </div>
             </section>
