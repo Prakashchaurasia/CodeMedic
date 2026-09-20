@@ -27,6 +27,7 @@ function App() {
     const [profile, setProfile] = useState(null);
     const [loading, setLoading] = useState(true);
     const [showSignup, setShowSignup] = useState(false);
+    const [authNotification, setAuthNotification] = useState(null);
     const [page, setPage] = useState(() => {
         try {
             return sessionStorage.getItem("codemedic_active_page") || "Dashboard";
