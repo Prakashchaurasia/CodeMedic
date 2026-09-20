@@ -2,16 +2,24 @@ import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabase";
 import { analyzeSubmittedCode } from "../services/codeAnalysis";
 import { analyzeWithAI } from "../services/aiAnalysis";
-import { executeStudentSolution, preloadCppExecutor } from "../services/cppExecutor";
-import { generateStarterCode, inferExecutionConfig } from "../services/executionHarness";
+import { preloadCppExecutor, subscribeRuntimeStatus, getRuntimeStatus } from "../services/cppExecutor";
+import { SUPPORTED_LANGUAGES, getLanguageConfig } from "../services/languageService";
+import { inferExecutionConfig } from "../services/executionHarness";
 import CodeEditor from "./CodeEditor";
 
 function AnalyzeCode({ problem, setPage }) {
+    const [selectedLanguage, setSelectedLanguage] = useState("cpp");
+    const [cppRuntimeStatus, setCppRuntimeStatus] = useState(getRuntimeStatus());
+
     useEffect(() => {
         preloadCppExecutor();
+        return subscribeRuntimeStatus((status) => {
+            setCppRuntimeStatus(status);
+        });
     }, []);
-    const [code, setCode] = useState("");
-    const [language, setLanguage] = useState("C++");
+
+    const langConfig = getLanguageConfig(selectedLanguage);
+    const language = langConfig.shortName;
 
     // Execution state
     const [isExecuting, setIsExecuting] = useState(false);
@@ -48,10 +56,11 @@ function AnalyzeCode({ problem, setPage }) {
     // Submission / Attempt state
     const [problemAttemptId, setProblemAttemptId] = useState(null);
 
-    // Initialize starter code and fetch test cases when problem changes
+    // Initialize starter code and fetch test cases when problem or language changes
     useEffect(() => {
         if (problem) {
-            const starter = generateStarterCode(problem);
+            const currentLang = getLanguageConfig(selectedLanguage);
+            const starter = currentLang.generateStarterCode(problem);
             setCode(starter);
             setExecutionResult(null);
             setAnalysis(null);
@@ -81,7 +90,17 @@ function AnalyzeCode({ problem, setPage }) {
                 setProblemTestCases([]);
             }
         }
-    }, [problem?.id, problem?.title]);
+    }, [problem?.id, problem?.title, selectedLanguage]);
+
+    function handleLanguageChange(newLangId) {
+        setSelectedLanguage(newLangId);
+        const nextLang = getLanguageConfig(newLangId);
+        if (problem) {
+            setCode(nextLang.generateStarterCode(problem));
+        }
+        setExecutionResult(null);
+        setProblemAttemptId(null);
+    }
 
     const problemPatterns =
         problem?.patterns ||
@@ -251,7 +270,8 @@ function AnalyzeCode({ problem, setPage }) {
         setExecutionResult(null);
 
         try {
-            const result = await executeStudentSolution(code, problem, problemTestCases);
+            const activeLang = getLanguageConfig(selectedLanguage);
+            const result = await activeLang.execute(code, problem, problemTestCases);
             console.log("Local execution result:", result);
             setExecutionResult(result);
             setActiveTab(0);
@@ -508,7 +528,8 @@ function AnalyzeCode({ problem, setPage }) {
     }
 
     function clearCode() {
-        const starter = generateStarterCode(problem);
+        const activeLang = getLanguageConfig(selectedLanguage);
+        const starter = activeLang.generateStarterCode(problem);
         setCode(starter);
         setExecutionResult(null);
         setProblemAttemptId(null);
@@ -816,8 +837,8 @@ function AnalyzeCode({ problem, setPage }) {
                             <select
                                 id="code-language-select"
                                 className="language-select"
-                                value={language}
-                                onChange={(event) => setLanguage(event.target.value)}
+                                value={selectedLanguage}
+                                onChange={(event) => handleLanguageChange(event.target.value)}
                                 style={{
                                     background: "#0f172a",
                                     border: "1px solid #1e293b",
@@ -830,23 +851,89 @@ function AnalyzeCode({ problem, setPage }) {
                                     outline: "none"
                                 }}
                             >
-                                <option value="C++">C++ (Clang C++17)</option>
+                                {SUPPORTED_LANGUAGES.map((lang) => (
+                                    <option key={lang.id} value={lang.id}>
+                                        {lang.name}
+                                    </option>
+                                ))}
                             </select>
-                            <span
-                                style={{
-                                    background: "rgba(56, 189, 248, 0.12)",
-                                    color: "#38bdf8",
-                                    border: "1px solid rgba(56, 189, 248, 0.25)",
-                                    padding: "3px 8px",
-                                    borderRadius: "4px",
-                                    fontSize: "10px",
-                                    fontWeight: "700",
-                                    letterSpacing: "0.5px"
-                                }}
-                                title="Executes entirely inside your browser via WebAssembly with zero server latency"
-                            >
-                                ⚡ BROWSER WASM
-                            </span>
+                            {selectedLanguage === "cpp" ? (
+                                cppRuntimeStatus === "warming" ? (
+                                    <span
+                                        style={{
+                                            display: "inline-flex",
+                                            alignItems: "center",
+                                            gap: "6px",
+                                            background: "rgba(245, 158, 11, 0.12)",
+                                            color: "#fbbf24",
+                                            border: "1px solid rgba(245, 158, 11, 0.3)",
+                                            padding: "3px 8px",
+                                            borderRadius: "4px",
+                                            fontSize: "10px",
+                                            fontWeight: "700",
+                                            letterSpacing: "0.5px"
+                                        }}
+                                        title="Compiler is preloading and caching in the background"
+                                    >
+                                        <span style={{ display: "inline-block", width: "6px", height: "6px", borderRadius: "50%", background: "#fbbf24" }} />
+                                        Preparing C++ environment...
+                                    </span>
+                                ) : cppRuntimeStatus === "ready" ? (
+                                    <span
+                                        style={{
+                                            display: "inline-flex",
+                                            alignItems: "center",
+                                            gap: "6px",
+                                            background: "rgba(34, 197, 94, 0.12)",
+                                            color: "#4ade80",
+                                            border: "1px solid rgba(34, 197, 94, 0.3)",
+                                            padding: "3px 8px",
+                                            borderRadius: "4px",
+                                            fontSize: "10px",
+                                            fontWeight: "700",
+                                            letterSpacing: "0.5px"
+                                        }}
+                                        title="C++ environment is warmed and ready for sub-second execution"
+                                    >
+                                        <span style={{ display: "inline-block", width: "6px", height: "6px", borderRadius: "50%", background: "#4ade80" }} />
+                                        C++ environment ready
+                                    </span>
+                                ) : (
+                                    <span
+                                        style={{
+                                            background: "rgba(56, 189, 248, 0.12)",
+                                            color: "#38bdf8",
+                                            border: "1px solid rgba(56, 189, 248, 0.25)",
+                                            padding: "3px 8px",
+                                            borderRadius: "4px",
+                                            fontSize: "10px",
+                                            fontWeight: "700",
+                                            letterSpacing: "0.5px"
+                                        }}
+                                    >
+                                        ⚡ BROWSER WASM
+                                    </span>
+                                )
+                            ) : (
+                                <span
+                                    style={{
+                                        display: "inline-flex",
+                                        alignItems: "center",
+                                        gap: "6px",
+                                        background: "rgba(56, 189, 248, 0.12)",
+                                        color: "#38bdf8",
+                                        border: "1px solid rgba(56, 189, 248, 0.25)",
+                                        padding: "3px 8px",
+                                        borderRadius: "4px",
+                                        fontSize: "10px",
+                                        fontWeight: "700",
+                                        letterSpacing: "0.5px"
+                                    }}
+                                >
+                                    <span style={{ display: "inline-block", width: "6px", height: "6px", borderRadius: "50%", background: "#38bdf8" }} />
+                                    JS environment ready
+                                </span>
+                            )}
                         </div>
                     </div>
 
@@ -859,6 +946,7 @@ function AnalyzeCode({ problem, setPage }) {
                         }}
                         disabled={isExecuting}
                         height="420px"
+                        language={getLanguageConfig(selectedLanguage).monacoLang}
                         compilationError={executionResult?.compilationError}
                     />
 
@@ -892,7 +980,11 @@ function AnalyzeCode({ problem, setPage }) {
                             disabled={code.trim() === "" || isExecuting || problemConfig?.requiresRegeneration}
                             title={problemConfig?.requiresRegeneration ? "This legacy problem requires regeneration" : undefined}
                         >
-                            {isExecuting ? "Compiling & Running..." : "▶ Run Code"}
+                            {isExecuting
+                                ? (selectedLanguage === "cpp" ? "Compiling & Running..." : "Running...")
+                                : (selectedLanguage === "cpp" && cppRuntimeStatus === "warming")
+                                    ? "⏳ Preparing C++ environment..."
+                                    : "▶ Run Code"}
                         </button>
 
                         <button

@@ -10,7 +10,6 @@ const BASE_HARNESS_PREAMBLE = `
 #include <iostream>
 #include <vector>
 #include <string>
-#include <sstream>
 #include <unordered_map>
 #include <unordered_set>
 #include <map>
@@ -94,31 +93,49 @@ namespace CodeMedicUtils {
 
     inline vector<int> parseVectorInt(const string& s) {
         vector<int> res;
-        string cleaned;
+        long long val = 0;
+        bool inNum = false;
+        bool neg = false;
         for (char c : s) {
-            if (c == '[' || c == ']' || c == ',') cleaned += ' ';
-            else cleaned += c;
+            if (c == '-' && !inNum) {
+                neg = true;
+                inNum = true;
+                val = 0;
+            } else if (c >= '0' && c <= '9') {
+                val = val * 10 + (c - '0');
+                inNum = true;
+            } else if (inNum) {
+                res.push_back(static_cast<int>(neg ? -val : val));
+                val = 0;
+                inNum = false;
+                neg = false;
+            }
         }
-        stringstream ss(cleaned);
-        int val;
-        while (ss >> val) {
-            res.push_back(val);
-        }
+        if (inNum) res.push_back(static_cast<int>(neg ? -val : val));
         return res;
     }
 
     inline vector<long long> parseVectorLongLong(const string& s) {
         vector<long long> res;
-        string cleaned;
+        long long val = 0;
+        bool inNum = false;
+        bool neg = false;
         for (char c : s) {
-            if (c == '[' || c == ']' || c == ',') cleaned += ' ';
-            else cleaned += c;
+            if (c == '-' && !inNum) {
+                neg = true;
+                inNum = true;
+                val = 0;
+            } else if (c >= '0' && c <= '9') {
+                val = val * 10 + (c - '0');
+                inNum = true;
+            } else if (inNum) {
+                res.push_back(neg ? -val : val);
+                val = 0;
+                inNum = false;
+                neg = false;
+            }
         }
-        stringstream ss(cleaned);
-        long long val;
-        while (ss >> val) {
-            res.push_back(val);
-        }
+        if (inNum) res.push_back(neg ? -val : val);
         return res;
     }
 

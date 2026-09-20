@@ -3,7 +3,10 @@ function detectDataStructures(code) {
 
     if (
         code.includes("vector<") ||
-        code.includes("vector <")
+        code.includes("vector <") ||
+        code.includes(".push(") ||
+        code.includes(".length") ||
+        code.includes("[]")
     ) {
         dataStructures.push("Array");
     }
@@ -11,7 +14,9 @@ function detectDataStructures(code) {
     if (
         code.includes("unordered_map") ||
         code.includes("map<") ||
-        code.includes("map <")
+        code.includes("map <") ||
+        code.includes("new Map") ||
+        code.includes("Map(")
     ) {
         dataStructures.push("Hash Map");
     }
@@ -19,44 +24,44 @@ function detectDataStructures(code) {
     if (
         code.includes("unordered_set") ||
         code.includes("set<") ||
-        code.includes("set <")
+        code.includes("set <") ||
+        code.includes("new Set") ||
+        code.includes("Set(")
     ) {
         dataStructures.push("Hash Set");
     }
 
     if (
         code.includes("stack<") ||
-        code.includes("stack <")
+        code.includes("stack <") ||
+        (code.includes(".pop()") && code.includes(".push("))
     ) {
         dataStructures.push("Stack");
     }
 
     if (
         code.includes("queue<") ||
-        code.includes("queue <")
+        code.includes("queue <") ||
+        code.includes(".shift()")
     ) {
         dataStructures.push("Queue");
     }
 
     if (
         code.includes("list<") ||
-        code.includes("list <")
+        code.includes("list <") ||
+        code.includes("ListNode")
     ) {
         dataStructures.push("Linked List");
     }
 
     if (
         code.includes("priority_queue") ||
-        code.includes("priority_queue <")
+        code.includes("priority_queue <") ||
+        code.includes("MinPriorityQueue") ||
+        code.includes("MaxPriorityQueue")
     ) {
         dataStructures.push("Heap");
-    }
-
-    if (
-        code.includes("unordered_map") ||
-        code.includes("unordered_set")
-    ) {
-        // Already detected above.
     }
 
     if (code.includes("TreeNode")) {

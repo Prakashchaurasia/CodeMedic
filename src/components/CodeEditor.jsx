@@ -31,6 +31,7 @@ export default function CodeEditor({
     disabled = false,
     height = "440px",
     compilationError = null,
+    language = "cpp",
 }) {
     const editorRef = useRef(null);
     const monacoRef = useRef(null);
@@ -122,7 +123,7 @@ export default function CodeEditor({
         >
             <Editor
                 height={height}
-                language="cpp"
+                language={language}
                 theme="codemedic-dark"
                 value={value}
                 onChange={(newVal) => onChange?.(newVal || "")}
