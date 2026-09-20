@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabase";
-import { resendVerificationEmail, sendPasswordResetEmail } from "../services/authService";
+import { resendVerificationEmail, sendPasswordResetEmail, formatAuthError } from "../services/authService";
 
 function Login({ onSwitchToSignup, onLoginSuccess, initialError }) {
     const [email, setEmail] = useState("");
@@ -13,15 +13,35 @@ function Login({ onSwitchToSignup, onLoginSuccess, initialError }) {
     // Resend verification state
     const [resendingVerification, setResendingVerification] = useState(false);
     const [showResendPrompt, setShowResendPrompt] = useState(false);
+    const [resendCooldown, setResendCooldown] = useState(0);
 
     // Forgot password state
     const [showForgotPassword, setShowForgotPassword] = useState(false);
     const [resetLoading, setResetLoading] = useState(false);
+    const [resetCooldown, setResetCooldown] = useState(0);
+
+    // Cooldown countdown timer for resending verification
+    useEffect(() => {
+        if (resendCooldown <= 0) return;
+        const timer = setInterval(() => {
+            setResendCooldown((prev) => (prev > 0 ? prev - 1 : 0));
+        }, 1000);
+        return () => clearInterval(timer);
+    }, [resendCooldown]);
+
+    // Cooldown countdown timer for password reset
+    useEffect(() => {
+        if (resetCooldown <= 0) return;
+        const timer = setInterval(() => {
+            setResetCooldown((prev) => (prev > 0 ? prev - 1 : 0));
+        }, 1000);
+        return () => clearInterval(timer);
+    }, [resetCooldown]);
 
     useEffect(() => {
         if (initialError) {
             setError(initialError);
-            if (initialError.toLowerCase().includes("expired") || initialError.toLowerCase().includes("verification")) {
+            if (initialError.toLowerCase().includes("expired") || initialError.toLowerCase().includes("verification") || initialError.toLowerCase().includes("rate limit")) {
                 setShowResendPrompt(true);
             }
         }
@@ -29,6 +49,9 @@ function Login({ onSwitchToSignup, onLoginSuccess, initialError }) {
 
     async function handleLogin(event) {
         event.preventDefault();
+
+        // Prevent duplicate submissions
+        if (loading) return;
 
         setError("");
         setInfoMessage("");
@@ -55,8 +78,12 @@ function Login({ onSwitchToSignup, onLoginSuccess, initialError }) {
         setLoading(false);
 
         if (loginError) {
-            setError(loginError.message);
-            if (loginError.message.toLowerCase().includes("email not confirmed")) {
+            const friendlyMsg = formatAuthError(loginError, "login");
+            setError(friendlyMsg);
+            if (
+                loginError.message.toLowerCase().includes("email not confirmed") ||
+                loginError.message.toLowerCase().includes("email rate limit")
+            ) {
                 setShowResendPrompt(true);
             }
             return;
@@ -72,16 +99,19 @@ function Login({ onSwitchToSignup, onLoginSuccess, initialError }) {
             return;
         }
 
+        if (resendingVerification || resendCooldown > 0) return;
+
         setResendingVerification(true);
         setError("");
         setInfoMessage("");
 
         try {
             await resendVerificationEmail(email.trim());
+            setResendCooldown(60);
             setInfoMessage("Verification email has been resent! Please check your inbox and spam folder.");
             setShowResendPrompt(false);
         } catch (err) {
-            setError(err?.message || "Failed to resend verification email. Please try again.");
+            setError(formatAuthError(err, "resend"));
         } finally {
             setResendingVerification(false);
         }
@@ -89,6 +119,8 @@ function Login({ onSwitchToSignup, onLoginSuccess, initialError }) {
 
     async function handleForgotPassword(event) {
         event.preventDefault();
+
+        if (resetLoading || resetCooldown > 0) return;
 
         setError("");
         setInfoMessage("");
@@ -102,10 +134,11 @@ function Login({ onSwitchToSignup, onLoginSuccess, initialError }) {
 
         try {
             await sendPasswordResetEmail(email.trim());
-            setInfoMessage("Password reset email sent! Please check your inbox.");
+            setResetCooldown(60);
+            setInfoMessage("Password reset email sent! Please check your inbox and spam folder.");
             setShowForgotPassword(false);
         } catch (err) {
-            setError(err?.message || "Failed to send password reset email. Please try again.");
+            setError(formatAuthError(err, "password_reset"));
         } finally {
             setResetLoading(false);
         }
@@ -141,9 +174,13 @@ function Login({ onSwitchToSignup, onLoginSuccess, initialError }) {
                         <button
                             type="submit"
                             className="auth-button"
-                            disabled={resetLoading}
+                            disabled={resetLoading || resetCooldown > 0}
                         >
-                            {resetLoading ? "Sending Link..." : "Send Reset Link"}
+                            {resetLoading
+                                ? "Sending Link..."
+                                : (resetCooldown > 0
+                                    ? `Wait ${resetCooldown}s before resending`
+                                    : "Send Reset Link")}
                         </button>
 
                         <div style={{ textAlign: "center", marginTop: "16px" }}>
@@ -217,21 +254,25 @@ function Login({ onSwitchToSignup, onLoginSuccess, initialError }) {
                                     <button
                                         type="button"
                                         onClick={handleResendVerification}
-                                        disabled={resendingVerification}
+                                        disabled={resendingVerification || resendCooldown > 0}
                                         style={{
-                                            background: "rgba(56, 189, 248, 0.1)",
-                                            border: "1px solid rgba(56, 189, 248, 0.3)",
-                                            color: "#38bdf8",
+                                            background: (resendingVerification || resendCooldown > 0) ? "rgba(100, 116, 139, 0.1)" : "rgba(56, 189, 248, 0.1)",
+                                            border: (resendingVerification || resendCooldown > 0) ? "1px solid rgba(100, 116, 139, 0.3)" : "1px solid rgba(56, 189, 248, 0.3)",
+                                            color: (resendingVerification || resendCooldown > 0) ? "#64748b" : "#38bdf8",
                                             borderRadius: "6px",
                                             padding: "6px 12px",
                                             fontSize: "12px",
                                             fontWeight: "500",
-                                            cursor: resendingVerification ? "not-allowed" : "pointer",
+                                            cursor: (resendingVerification || resendCooldown > 0) ? "not-allowed" : "pointer",
                                             width: "100%",
                                             textAlign: "center"
                                         }}
                                     >
-                                        {resendingVerification ? "Sending..." : "Resend Verification Email"}
+                                        {resendingVerification
+                                            ? "Sending..."
+                                            : (resendCooldown > 0
+                                                ? `Resend available in ${resendCooldown}s`
+                                                : "Resend Verification Email")}
                                     </button>
                                 )}
                             </div>

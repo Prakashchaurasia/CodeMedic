@@ -10,6 +10,7 @@ import {
     calculateUserPoints
 } from "../services/profileService";
 import { getUserAttempts, calculateCurrentStreak } from "../services/dashboardService";
+import { formatAuthError } from "../services/authService";
 import "./Settings.css";
 
 const SETTINGS_SECTIONS = [
@@ -112,13 +113,14 @@ function Settings({ user, onProfileUpdated, setPage }) {
     // Account: Update Email
     async function handleUpdateEmail(e) {
         e.preventDefault();
+        if (emailUpdating) return;
         setEmailUpdating(true);
         try {
             await updateUserEmail(newEmail);
             showToast("Confirmation email sent! Please check your inbox to confirm.");
         } catch (err) {
             console.error("Email update error:", err);
-            showToast(err.message || "Failed to update email.");
+            showToast(formatAuthError(err, "email_change"));
         } finally {
             setEmailUpdating(false);
         }
@@ -127,6 +129,7 @@ function Settings({ user, onProfileUpdated, setPage }) {
     // Account: Update Password
     async function handleUpdatePassword(e) {
         e.preventDefault();
+        if (passwordUpdating) return;
         if (newPassword !== confirmPassword) {
             showToast("Passwords do not match.");
             return;
@@ -139,7 +142,7 @@ function Settings({ user, onProfileUpdated, setPage }) {
             showToast("Password updated successfully!");
         } catch (err) {
             console.error("Password update error:", err);
-            showToast(err.message || "Failed to update password.");
+            showToast(formatAuthError(err, "password_reset"));
         } finally {
             setPasswordUpdating(false);
         }

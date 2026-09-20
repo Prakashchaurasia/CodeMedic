@@ -106,6 +106,63 @@ export async function sendPasswordResetEmail(email) {
 }
 
 /**
+ * Detects whether an error returned from Supabase is an email rate limit / throttle error.
+ */
+export function isEmailRateLimitError(error) {
+    if (!error) return false;
+    const msg = (typeof error === "string" ? error : error.message || "").toLowerCase();
+    const code = (error.code || "").toLowerCase();
+    const status = error.status;
+
+    return (
+        status === 429 ||
+        code === "over_email_send_rate_limit" ||
+        code === "rate_limit_exceeded" ||
+        code === "too_many_requests" ||
+        msg.includes("email rate limit") ||
+        msg.includes("rate limit exceeded") ||
+        msg.includes("too many requests") ||
+        msg.includes("once every") ||
+        msg.includes("security purposes") ||
+        msg.includes("over_email_send_rate_limit")
+    );
+}
+
+/**
+ * Formats authentication and email delivery errors into friendly, clear messages without hiding details.
+ * 
+ * @param {Error|Object|string} error The raw error object or string
+ * @param {"signup"|"resend"|"password_reset"|"email_change"|"login"|"verification"} [context="verification"]
+ * @returns {string} Human-friendly error description
+ */
+export function formatAuthError(error, context = "verification") {
+    if (!error) return "";
+    const rawMessage = typeof error === "string" ? error : error.message || "";
+
+    if (isEmailRateLimitError(error) || rawMessage.toLowerCase().includes("email rate limit")) {
+        // Look for specific cooldown seconds if provided by Supabase (e.g. "once every 60 seconds")
+        const match = rawMessage.match(/(\d+)\s*seconds?/i);
+        const waitTime = match ? `${match[1]} seconds` : "a few minutes";
+
+        if (context === "signup") {
+            return `Too many verification email requests were sent from this network. Please wait ${waitTime} before trying again, or check your spam/junk folder for the confirmation email already sent.`;
+        }
+        if (context === "password_reset") {
+            return `Too many password reset requests. Please wait ${waitTime} before requesting another reset link, or check your inbox and spam folder.`;
+        }
+        if (context === "email_change") {
+            return `Too many confirmation requests. Please wait ${waitTime} before requesting another email update.`;
+        }
+        if (context === "login") {
+            return `Too many login attempts or unconfirmed email requests. Please wait ${waitTime} before trying again.`;
+        }
+        return `Too many verification emails were requested. Please wait ${waitTime} before trying again, or check your spam folder for the existing link.`;
+    }
+
+    return rawMessage;
+}
+
+/**
  * Parses authentication callback errors or status from window.location hash and search parameters.
  * Handles cases like:
  * - #error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid+or+has+expired
@@ -119,6 +176,7 @@ export function parseAuthUrlParams() {
             errorCode: null,
             errorDescription: null,
             isOtpExpired: false,
+            isRateLimited: false,
             userFriendlyMessage: null,
         };
     }
@@ -137,11 +195,14 @@ export function parseAuthUrlParams() {
 
     let errorDescription = rawDescription ? decodeURIComponent(rawDescription.replace(/\+/g, " ")) : null;
     const isOtpExpired = errorCode === "otp_expired" || (errorDescription && errorDescription.toLowerCase().includes("expired"));
+    const isRateLimited = isEmailRateLimitError({ message: errorDescription, code: errorCode });
 
     let userFriendlyMessage = null;
     if (error || errorCode) {
         if (isOtpExpired) {
             userFriendlyMessage = "Your email verification link has expired or has already been used. Please request a new verification email below.";
+        } else if (isRateLimited) {
+            userFriendlyMessage = formatAuthError(errorDescription || "email rate limit exceeded", "verification");
         } else if (errorDescription) {
             userFriendlyMessage = errorDescription;
         } else {
@@ -155,6 +216,7 @@ export function parseAuthUrlParams() {
         errorCode,
         errorDescription,
         isOtpExpired,
+        isRateLimited,
         userFriendlyMessage,
         accessToken,
         type,

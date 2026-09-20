@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { signUpUser, resendVerificationEmail } from "../services/authService";
+import { useState, useEffect } from "react";
+import { signUpUser, resendVerificationEmail, formatAuthError } from "../services/authService";
 
 function Signup({ onSwitchToLogin }) {
     const [name, setName] = useState("");
@@ -13,9 +13,22 @@ function Signup({ onSwitchToLogin }) {
     const [registeredEmail, setRegisteredEmail] = useState("");
     const [resending, setResending] = useState(false);
     const [resendSuccess, setResendSuccess] = useState(false);
+    const [cooldown, setCooldown] = useState(0);
+
+    // Cooldown countdown timer
+    useEffect(() => {
+        if (cooldown <= 0) return;
+        const timer = setInterval(() => {
+            setCooldown((prev) => (prev > 0 ? prev - 1 : 0));
+        }, 1000);
+        return () => clearInterval(timer);
+    }, [cooldown]);
 
     async function handleSignup(event) {
         event.preventDefault();
+
+        // Prevent duplicate in-flight submissions
+        if (loading) return;
 
         setMessage("");
         setError("");
@@ -53,11 +66,12 @@ function Signup({ onSwitchToLogin }) {
         setLoading(false);
 
         if (signupError) {
-            setError(signupError.message);
+            setError(formatAuthError(signupError, "signup"));
             return;
         }
 
         setRegisteredEmail(targetEmail);
+        setCooldown(60);
         setMessage(
             "Account created successfully! Please check your email and verify your account."
         );
@@ -69,15 +83,16 @@ function Signup({ onSwitchToLogin }) {
     }
 
     async function handleResend() {
-        if (!registeredEmail) return;
+        if (!registeredEmail || resending || cooldown > 0) return;
         setResending(true);
         setError("");
         try {
             await resendVerificationEmail(registeredEmail);
             setResendSuccess(true);
+            setCooldown(60);
             setMessage("Verification email has been resent! Please check your inbox and spam folder.");
         } catch (err) {
-            setError(err?.message || "Failed to resend verification email. Please try again.");
+            setError(formatAuthError(err, "resend"));
         } finally {
             setResending(false);
         }
@@ -161,19 +176,23 @@ function Signup({ onSwitchToLogin }) {
                                     <button
                                         type="button"
                                         onClick={handleResend}
-                                        disabled={resending}
+                                        disabled={resending || cooldown > 0}
                                         style={{
                                             background: "transparent",
                                             border: "none",
-                                            color: "#38bdf8",
-                                            textDecoration: "underline",
-                                            cursor: resending ? "not-allowed" : "pointer",
+                                            color: (resending || cooldown > 0) ? "#64748b" : "#38bdf8",
+                                            textDecoration: (resending || cooldown > 0) ? "none" : "underline",
+                                            cursor: (resending || cooldown > 0) ? "not-allowed" : "pointer",
                                             padding: 0,
                                             fontSize: "13px",
                                             fontWeight: "500"
                                         }}
                                     >
-                                        {resending ? "Resending..." : (resendSuccess ? "Resend again" : "Resend Verification Email")}
+                                        {resending
+                                            ? "Resending..."
+                                            : (cooldown > 0
+                                                ? `Resend available in ${cooldown}s`
+                                                : (resendSuccess ? "Resend again" : "Resend Verification Email"))}
                                     </button>
                                 </div>
                             )}

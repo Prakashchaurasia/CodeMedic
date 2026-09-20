@@ -27,6 +27,8 @@ const {
     signUpUser,
     resendVerificationEmail,
     sendPasswordResetEmail,
+    isEmailRateLimitError,
+    formatAuthError,
     PRODUCTION_ORIGIN,
     LOCAL_DEV_ORIGIN
 } = await import(pathToFileURL(authServicePath).href);
@@ -78,4 +80,29 @@ if (typeof signUpUser !== 'function' || typeof resendVerificationEmail !== 'func
     throw new Error("Missing exported auth functions");
 }
 
-console.log("\n✓ ALL AUTH REDIRECT & CALLBACK TESTS PASSED!");
+// Test 7: Rate limit error detection
+const rateLimitErr1 = { message: "email rate limit exceeded", status: 429 };
+const rateLimitErr2 = { message: "For security purposes, you can only request this once every 60 seconds", code: "over_email_send_rate_limit" };
+const normalErr = { message: "Invalid login credentials" };
+
+if (!isEmailRateLimitError(rateLimitErr1) || !isEmailRateLimitError(rateLimitErr2)) {
+    throw new Error("Failed to detect email rate limit error");
+}
+if (isEmailRateLimitError(normalErr)) {
+    throw new Error("False positive for normal error in isEmailRateLimitError");
+}
+
+// Test 8: Rate limit error formatting
+const formattedSignup = formatAuthError(rateLimitErr1, "signup");
+console.log("Formatted signup rate limit error:", formattedSignup);
+if (!formattedSignup.includes("Too many verification email requests") || !formattedSignup.includes("spam/junk")) {
+    throw new Error("Unexpected format for signup rate limit error");
+}
+
+const formattedCooldown = formatAuthError(rateLimitErr2, "resend");
+console.log("Formatted resend rate limit error with 60s cooldown:", formattedCooldown);
+if (!formattedCooldown.includes("60 seconds")) {
+    throw new Error("Failed to preserve specific 60 seconds cooldown from message");
+}
+
+console.log("\n✓ ALL AUTH REDIRECT, RATE LIMIT & CALLBACK TESTS PASSED!");
